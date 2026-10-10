@@ -91,4 +91,4 @@ Both belong to their corresponding owners. No other ROMs included.
 
 ---
 
-(c) 2026 Trinh D.D. Nguyen, Infinity Group.
+by Trinh D.D. Nguyen.
