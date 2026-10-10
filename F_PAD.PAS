@@ -6,11 +6,13 @@
 	out by $4016 and $4017 reads (A first, then 1s); up with down or
 	left with right let go, as a real pad cannot.
 -*}
+{$S-}		{ no stack check at every call }
 unit	f_pad;
 
 interface
 
-const	PAD_A		= $01;
+const
+	PAD_A		= $01;
 	PAD_B		= $02;
 	PAD_SELECT	= $04;
 	PAD_START	= $08;

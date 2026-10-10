@@ -9,17 +9,19 @@
 	What nothing answers reads as the last value on the bus.
 -*}
 {$X+}
+{$S-}		{ no stack check at every call }
 unit	f_bus;
 
 interface
 
-uses	f_sys, f_map;
+uses
+	f_sys, f_map;
 
-var	ram		: array[0 .. 2047] of byte;
+var	ram			: array[0 .. 2047] of byte;
 	cycles		: longint;	{ CPU cycles since the last rebase }
 	cycles_base	: longint;	{ what rebases took off }
 	bus_next_event	: longint;
-	bus_open	: longint;	{ the data bus's last value }
+	bus_open	: U16;		{ the data bus's last value }
 	dma_page	: longint;	{ an OAM DMA asked for, or -1 }
 	step_cycle	: longint;	{ the cycle the CPU's step began on }
 	{ the CPU's map by 2 KB pages, what reads and writes reach as plain
@@ -30,8 +32,8 @@ var	ram		: array[0 .. 2047] of byte;
 procedure	bus_power;
 
 procedure	bus_map;			{ the pages made again }
-function	bus_read(addr: longint): longint;
-procedure	bus_write(addr, v: longint);
+function	bus_read(addr: longint): longint;	{ its type: the DMC's reader too }
+procedure	bus_write(addr, v: U16);
 procedure	bus_sync;			{ the PPU and APU up to cycles }
 function	bus_irq: boolean;		{ the IRQ line }
 function	bus_irq_at: longint;		{ the cycle it went high, when it is }
@@ -39,7 +41,8 @@ procedure	bus_rebase;			{ cycles back to 0, all with it }
 
 implementation
 
-uses	f_cart, f_ppu, f_apu, f_pad;
+uses
+	f_cart, f_ppu, f_apu, f_pad;
 
 procedure	bus_power;
 begin
@@ -66,55 +69,56 @@ begin
 	end;
 	for i := 0 to 3 do
 	begin
-		bus_rpage[i] := PBYTE(@ram) - i * $800;
+		bus_rpage[i] := padd(@ram, -i * $800);
 		bus_wpage[i] := bus_rpage[i];
 	end;
 	if wram_on and (wram <> nil) then
 		for i := 12 to 15 do
 		begin
-			bus_rpage[i] := wram - $6000;
+			bus_rpage[i] := padd(wram, -$6000);
 			if wram_write then bus_wpage[i] := bus_rpage[i];
 		end;
 	if board <> nil then
 		for i := 16 to 31 do
 		begin
 			s := (i - 16) shr 2;
-			bus_rpage[i] := prg_slot[s] - ($8000 + s * $2000);
+			bus_rpage[i] := padd(prg_slot[s], -($8000 + s * $2000));
 		end;
 end;
 
 function	bus_read(addr: longint): longint;
-var	v	: longint;
+var	a, v	: U16;
 begin
-	case addr shr 13 of
-	0:	v := ram[addr and $7FF];
+	a := addr;			{ a word: BP7 shifts it without a call }
+	case a shr 13 of
+	0:	v := ram[a and $7FF];
 	1:	begin
-			v := ppu_read(addr and 7, cycles);
+			v := ppu_read(a and 7, cycles);
 			{ $2007 moves A12: the board's IRQ may rise }
-			if addr and 7 = 7 then bus_next_event := cycles;
+			if a and 7 = 7 then bus_next_event := cycles;
 		end;
-	2:	if addr < $4020 then
+	2:	if a < $4020 then
 		begin
-			case addr of
+			case a of
 			$4015:	begin
-					v := apu_read(addr, cycles) or (bus_open and $20);
+					v := apu_read(a, cycles) or (bus_open and $20);
 					bus_next_event := cycles;	{ a stall; the IRQ cleared }
 				end;
 			$4016, $4017:
-				v := (bus_open and $E0) or pad_read(addr - $4016);
+				v := (bus_open and $E0) or pad_read(a - $4016);
 			else	v := bus_open;
 			end;
 		end
 		else	v := bus_open;
-	3:	if wram_on then v := (wram + (addr and $1FFF))^
+	3:	if wram_on then v := PBYTES(wram)^[a and $1FFF]
 		else	v := bus_open;
-	else	v := (prg_slot[(addr shr 13) and 3] + (addr and $1FFF))^;
+	else	v := PBYTES(prg_slot[(a shr 13) and 3])^[a and $1FFF];
 	end;
 	bus_open := v;
 	bus_read := v;
 end;
 
-procedure	bus_write(addr, v: longint);
+procedure	bus_write(addr, v: U16);
 begin
 	bus_open := v;
 	case addr shr 13 of
@@ -137,10 +141,10 @@ begin
 				bus_next_event := cycles;
 			end;
 		end;
-	3:	if wram_on and wram_write then (wram + (addr and $1FFF))^ := v;
+	3:	if wram_on and wram_write then PBYTES(wram)^[addr and $1FFF] := v;
 	else
 	begin
-		if bus_conflicts then v := v and (prg_slot[(addr shr 13) and 3] + (addr and $1FFF))^;
+		if bus_conflicts then v := v and PBYTES(prg_slot[(addr shr 13) and 3])^[addr and $1FFF];
 		ppu_run(step_cycle);
 		board^.Write(addr, v, cycles);
 		ppu_split(cycles, SPLIT_FETCH);	{ its banks from there on the line }

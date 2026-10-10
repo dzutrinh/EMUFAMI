@@ -2,17 +2,22 @@
 	F_CART.PAS - EMUFAMI
 	(c) 2026 Trinh D.D. Nguyen, Infinity Group
 
-	A .NES file read whole: the iNES or NES 2.0 header, trainer,
-	PRG and CHR; refused with the reason in cart_why.  The TV system
-	from the header; headers taken as they are.
+	A .NES file: the iNES or NES 2.0 header, trainer, PRG and CHR,
+	read into blocks of 32 KB (no compiler's block holds a whole big
+	ROM in 16-bit protected mode); cart_prg and cart_chr find a byte
+	by its offset.  Refused with the reason in cart_why.  The TV
+	system from the header; headers taken as they are.
 -*}
+{$S-}		{ no stack check at every call }
 unit	f_cart;
 
 interface
 
-uses	f_sys;
+uses
+	f_sys;
 
-const	MIRROR_H	= 0;		{ horizontal: $2000 = $2400 }
+const
+	MIRROR_H	= 0;		{ horizontal: $2000 = $2400 }
 	MIRROR_V	= 1;		{ vertical: $2000 = $2800 }
 	MIRROR_FOUR	= 2;		{ four screens, RAM on the cartridge }
 
@@ -21,13 +26,17 @@ const	MIRROR_H	= 0;		{ horizontal: $2000 = $2400 }
 	TV_MULTI	= 2;		{ either: NTSC is used }
 	TV_DENDY	= 3;
 
-type	PCART	= ^CART;
+	CHUNK		= 32768;	{ a ROM block }
+	CHUNKS		= 64;		{ 2 MB of PRG, 2 MB of CHR at most }
+
+type
+	PCART	= ^CART;
 	CART	= record
 		mapper		: longint;
 		submapper	: longint;
 		nes2		: boolean;
 		mirror		: longint;	{ MIRROR_* as the header says }
-		tv		: longint;	{ TV_* }
+		tv			: longint;	{ TV_* }
 		battery		: boolean;
 		prg_size	: longint;	{ bytes }
 		chr_size	: longint;	{ bytes; 0: the board has CHR RAM }
@@ -36,40 +45,37 @@ type	PCART	= ^CART;
 		chr_ram		: longint;
 		chr_nvram	: longint;
 		trainer		: PBYTE;	{ 512 bytes for $7000, or nil }
-		prg		: PBYTE;
-		chr		: PBYTE;	{ nil when chr_size is 0 }
-		image		: PBYTE;	{ the file }
+		prg			: array[0 .. CHUNKS - 1] of PBYTE;
+		chr			: array[0 .. CHUNKS - 1] of PBYTE;
 	end;
 
-{ an image in memory: the record points into it, which stays the caller's }
-function	cart_parse(buf: PBYTE; size: longint; var c: CART): boolean;
-function	cart_load(const name: string; var c: CART): boolean;	{ a .NES file, read whole }
+function	cart_load(const name: string; var c: CART): boolean;
 procedure	cart_free(var c: CART);
+function	cart_prg(var c: CART; offset: longint): PBYTE;	{ the PRG's byte at offset }
+function	cart_chr(var c: CART; offset: longint): PBYTE;	{ the CHR ROM's }
 function	cart_why: string;			{ why the last one was refused }
-function	cart_mapper_name(n: longint): string;	{ '' for one not named }
 
 implementation
 
-var	why	: string;
+type
+	HEADER	= array[0 .. 15] of byte;
+
+var
+	why	: string;
 
 function	cart_why: string;
 begin
 	cart_why := why;
 end;
 
-function	cart_mapper_name(n: longint): string;
+function	cart_prg(var c: CART; offset: longint): PBYTE;
 begin
-	case n of
-	0:	cart_mapper_name := 'NROM';
-	1:	cart_mapper_name := 'MMC1';
-	2:	cart_mapper_name := 'UxROM';
-	3:	cart_mapper_name := 'CNROM';
-	4:	cart_mapper_name := 'MMC3';
-	7:	cart_mapper_name := 'AxROM';
-	11:	cart_mapper_name := 'Color Dreams';
-	66:	cart_mapper_name := 'GxROM';
-	else	cart_mapper_name := '';
-	end;
+	cart_prg := padd(c.prg[offset div CHUNK], offset mod CHUNK);
+end;
+
+function	cart_chr(var c: CART; offset: longint): PBYTE;
+begin
+	cart_chr := padd(c.chr[offset div CHUNK], offset mod CHUNK);
 end;
 
 { a NES 2.0 size: units times lsb, or with the high nibble $F,
@@ -82,30 +88,22 @@ begin
 	begin
 		e := lsb shr 2;
 		if e > 24 then rom_size := -1
-		else	rom_size := (1 shl e) * ((lsb and 3) * 2 + 1);
+		else	rom_size := (longint(1) shl e) * ((lsb and 3) * 2 + 1);
 	end;
 end;
 
 function	ram_size(shift: longint): longint;
 begin
-	if shift = 0 then ram_size := 0 else ram_size := 64 shl shift;
+	if shift = 0 then ram_size := 0 else ram_size := longint(64) shl shift;
 end;
 
-function	cart_parse(buf: PBYTE; size: longint; var c: CART): boolean;
-var	h	: array[0 .. 15] of byte;
-	need, i	: longint;
+{ the header's facts into c; FALSE (why set) when it is refused }
+function	parse_header(var h: HEADER; size: longint; var c: CART): boolean;
+var	need, i	: longint;
 	junk	: boolean;
-	p	: PBYTE;
 begin
-	cart_parse := FALSE;
-	fillchar(c, sizeof(CART), 0);
-	if (buf = nil) or (size < 16) then
-	begin
-		why := 'not an iNES file: too short';
-		exit;
-	end;
-	move(buf^, h, 16);
-	if (h[0] <> $4E) or (h[1] <> $45) or (h[2] <> $53) or (h[3] <> $1A) then
+	parse_header := FALSE;
+	if (size < 16) or (h[0] <> $4E) or (h[1] <> $45) or (h[2] <> $53) or (h[3] <> $1A) then
 	begin
 		why := 'not an iNES file';
 		exit;
@@ -122,7 +120,7 @@ begin
 	c.battery := h[6] and 2 <> 0;
 	if c.nes2 then
 	begin
-		c.mapper    := c.mapper or (h[8] and $0F) shl 8;
+		c.mapper    := c.mapper or longint(h[8] and $0F) shl 8;
 		c.submapper := h[8] shr 4;
 		c.prg_size  := rom_size(h[4], h[9] and $0F, 16384);
 		c.chr_size  := rom_size(h[5], h[9] shr 4, 8192);
@@ -133,8 +131,8 @@ begin
 	end
 	else
 	begin
-		c.prg_size := h[4] * 16384;
-		c.chr_size := h[5] * 8192;
+		c.prg_size := longint(h[4]) * 16384;
+		c.chr_size := longint(h[5]) * 8192;
 		{ iNES leaves the RAM unsaid: 8 KB at $6000, kept by the
 		  battery when there is one; 8 KB of CHR RAM without CHR ROM }
 		if c.battery then c.prg_nvram := 8192 else c.prg_ram := 8192;
@@ -145,14 +143,16 @@ begin
 		case h[7] and 3 of
 		1:	why := 'a Vs. System cartridge';
 		2:	why := 'a PlayChoice-10 cartridge';
-		else	why := 'a cartridge for another console';
+		else
+			why := 'a cartridge for another console';
 		end;
 		exit;
 	end;
 	if c.nes2 then c.tv := h[12] and 3
 	else if not junk and (h[9] and 1 <> 0) then c.tv := TV_PAL
 	else	c.tv := TV_NTSC;
-	if (c.prg_size < 0) or (c.chr_size < 0) then
+	if (c.prg_size < 0) or (c.chr_size < 0) or (c.prg_size > longint(CHUNKS) * CHUNK)
+	or (c.chr_size > longint(CHUNKS) * CHUNK) then
 	begin
 		why := 'a ROM size beyond any cartridge';
 		exit;
@@ -174,22 +174,44 @@ begin
 		why := 'the file is cut short: ' + itoa(size) + ' bytes of ' + itoa(need);
 		exit;
 	end;
-	p := buf + 16;
-	if h[6] and 4 <> 0 then
+	parse_header := TRUE;
+end;
+
+{ n bytes of the file into blocks of CHUNK; FALSE when short of memory }
+function	read_chunks(var f: file; n: longint; var chunks: array of PBYTE): boolean;
+var	k,
+	part: longint;
+	got	: RWCOUNT;
+begin
+	read_chunks := FALSE;
+	k := 0;
+	while n > 0 do
 	begin
-		c.trainer := p;
-		inc(p, 512);
+		part := n;
+		if part > CHUNK then part := CHUNK;
+		chunks[k] := malloc(part);
+		if chunks[k] = nil then
+		begin
+			why := 'not enough memory';
+			exit;
+		end;
+		blockread(f, chunks[k]^, part, got);
+		if got <> part then
+		begin
+			why := 'cannot read the file';
+			exit;
+		end;
+		dec(n, part);
+		inc(k);
 	end;
-	c.prg := p;
-	if c.chr_size > 0 then c.chr := p + c.prg_size;
-	why := '';
-	cart_parse := TRUE;
+	read_chunks := TRUE;
 end;
 
 function	cart_load(const name: string; var c: CART): boolean;
-var	f		: file;
-	size, got	: longint;
-	buf		: PBYTE;
+var	f	: file;
+	h	: HEADER;
+	got	: RWCOUNT;
+	ok	: boolean;
 begin
 	cart_load := FALSE;
 	fillchar(c, sizeof(CART), 0);
@@ -202,29 +224,36 @@ begin
 		why := 'cannot open ' + name;
 		exit;
 	end;
-	size := filesize(f);
-	buf := malloc(size + 1);
-	if buf = nil then
+	blockread(f, h, 16, got);
+	ok := (got = 16) and parse_header(h, filesize(f), c);
+	if not ok and (got <> 16) then why := 'not an iNES file: too short';
+	if ok and (h[6] and 4 <> 0) then
 	begin
-		close(f);
-		why := 'not enough memory for ' + itoa(size) + ' bytes';
-		exit;
+		c.trainer := malloc(512);
+		ok := c.trainer <> nil;
+		if ok then blockread(f, c.trainer^, 512, got);
 	end;
-	blockread(f, buf^, size, got);
+	if ok then ok := read_chunks(f, c.prg_size, c.prg);
+	if ok then ok := read_chunks(f, c.chr_size, c.chr);
 	close(f);
-	if (got <> size) or not cart_parse(buf, size, c) then
+	if not ok then
 	begin
-		if got <> size then why := 'cannot read ' + name;
-		free(pointer(buf));
+		cart_free(c);
 		exit;
 	end;
-	c.image := buf;
+	why := '';
 	cart_load := TRUE;
 end;
 
 procedure	cart_free(var c: CART);
+var	k	: longint;
 begin
-	if c.image <> nil then free(pointer(c.image));
+	for k := 0 to CHUNKS - 1 do
+	begin
+		free(pointer(c.prg[k]));
+		free(pointer(c.chr[k]));
+	end;
+	free(pointer(c.trainer));
 	fillchar(c, sizeof(CART), 0);
 end;
 

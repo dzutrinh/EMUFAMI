@@ -6,13 +6,16 @@
 	2C02's signal (NESdev's "NTSC video") decoded as YIQ; eight sets,
 	one per emphasis.
 -*}
+{$ifdef VER70}{$F+}{$N+}{$E+}{$endif}
 unit	f_pal;
 
 interface
 
-const	NES_COLOURS	= 64;
+const
+	NES_COLOURS	= 64;
 
-type	NES_RGB		= packed record
+type
+	NES_RGB		= packed record
 		r, g, b	: byte;
 	end;
 	NES_SET		= array[0 .. NES_COLOURS - 1] of NES_RGB;
@@ -25,11 +28,14 @@ procedure	pal_forget;				{ the DAC was changed: show again }
 
 implementation
 
-uses	f_vga;
+uses
+	f_vga;
 
-const	DAMP	= 0.746;
+const
+	DAMP	= 0.746;
 
-var	shown	: longint;
+var
+	shown	: longint;
 
 function	channel(v: double): byte;
 begin
@@ -39,7 +45,8 @@ begin
 end;
 
 procedure	pal_make;
-const	LEVELS	: array[0 .. 7] of double =
+const
+	LEVELS	: array[0 .. 7] of double =
 		(0.350, 0.518, 0.962, 1.550,	{ the signal low, by luma }
 		 1.094, 1.506, 1.962, 1.962);	{ and high }
 	BLACK	= 0.518;

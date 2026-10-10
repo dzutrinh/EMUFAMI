@@ -11,23 +11,32 @@
 	(after NESticle), drawn again only when what made them changed.
 -*}
 {$X+}
+{$S-}		{ no stack check at every call }
 unit	f_ppu;
 
 interface
 
-const	PPU_W		= 256;
+uses
+	f_sys;
+
+const
+	PPU_W		= 256;
 	PPU_H		= 240;
 	PPU_NEVER	= $7FFFFFFF;
 
-var	ppu_screen	: array[0 .. PPU_H - 1, 0 .. PPU_W - 1] of byte;
+type
+	PPU_PICTURE	= array[0 .. PPU_H - 1, 0 .. PPU_W - 1] of byte;
+	PPPU_PICTURE	= ^PPU_PICTURE;
+
+var	ppu_screen		: PPPU_PICTURE;	{ the picture (made by ppu_start) }
 	ppu_nmi_cycle	: longint;	{ the CPU cycle an NMI was seen on, or PPU_NEVER }
-	ppu_frames	: longint;	{ frames ended since power }
-	ppu_mask	: longint;	{ $2001 }
-	oam		: array[0 .. 255] of byte;
+	ppu_frames		: longint;	{ frames ended since power }
+	ppu_mask		: U16;		{ $2001 }
+	oam				: array[0 .. 255] of byte;
 	{ the TV system (F_CART's TV_NTSC, TV_PAL, TV_DENDY), set before
 	  ppu_power: PAL 3.2 dots a CPU cycle, 312 lines, no short odd frame;
 	  Dendy 3 dots, 312 lines, VBlank at line 291 }
-	ppu_region	: longint;
+	ppu_region		: longint;
 
 procedure	ppu_start;				{ the pixel tables made (else by ppu_power) }
 procedure	ppu_power;
@@ -37,27 +46,34 @@ procedure	ppu_run(at: longint);			{ up to CPU cycle at }
 function	ppu_line_now: longint;			{ the line ppu_run left it on (0-239 the picture) }
 function	ppu_next: longint;			{ the CPU cycle of what happens next }
 function	ppu_frame_end: longint;			{ the CPU cycle the frame ends by }
-function	ppu_read(reg, at: longint): longint;	{ reg 0..7 }
-procedure	ppu_write(reg, v, at: longint);
+function	ppu_read(reg: U16; at: longint): U16;	{ reg 0..7 }
+procedure	ppu_write(reg, v: U16; at: longint);
 function	ppu_peek(reg: longint): longint;	{ no side effects }
 procedure	ppu_rebase(k: longint);			{ k CPU cycles taken off every time }
+
 { a change at CPU cycle at that the line being drawn shows from its point
   on: what the fetches see (SPLIT_FETCH, two tiles on) or the output
   (SPLIT_NOW) }
-const	SPLIT_FETCH	= 0;
+const
+	SPLIT_FETCH	= 0;
 	SPLIT_NOW	= 1;
+
 procedure	ppu_split(at, kind: longint);
 
 implementation
 
-uses	f_sys, f_cart, f_map;
+uses
+	f_cart, f_map;
 
-type	EV_LIST		= array[0 .. 8] of longint;
+type
+	EV_LIST		= array[0 .. 8] of longint;
+	SPR_LIST	= array[0 .. 63] of byte;	{ sprites' numbers }
 	SLOTS		= array[0 .. 7] of PBYTE;
 	PSLOTS		= ^SLOTS;
 	PEV_LIST	= ^EV_LIST;
 
-const	PPU_ALIGN	= -1;	{ dot = 3 * cycle + PPU_ALIGN }
+const
+	PPU_ALIGN	= -1;	{ dot = 3 * cycle + PPU_ALIGN }
 	SPLIT_JUMP	= 2;	{ ppu_split's: $2006 moved v (fetched from it) }
 	HIT_DELAY	= 2;	{ sprite 0 hit: dots after its pixel's line start }
 	LINE_DOTS	= 341;
@@ -98,12 +114,14 @@ const	PPU_ALIGN	= -1;	{ dot = 3 * cycle + PPU_ALIGN }
 		$09, $01, $00, $01, $00, $02, $02, $0D, $08, $10, $08, $24, $00, $00, $04, $2C,
 		$09, $01, $34, $03, $00, $04, $00, $14, $08, $3A, $00, $02, $00, $20, $2C, $08);
 
-var	vram		: array[0 .. 4095] of byte;	{ 4 KB of nametables }
-	pal		: array[0 .. 31] of byte;
+var
+	vram		: array[0 .. 4095] of byte;	{ 4 KB of nametables }
+	pal			: array[0 .. 31] of byte;
 	frame_start	: longint;	{ the dot the frame began at }
-	line, line_start: longint;
+	line,
+	line_start	: longint;
 	line_len	: longint;
-	ev		: longint;	{ the next event on this line }
+	ev			: longint;	{ the next event on this line }
 	next_dot	: longint;
 	odd_frame	: boolean;
 	vbl_at		: longint;	{ the dot VBlank was set, or PPU_NEVER while clear }
@@ -111,18 +129,19 @@ var	vram		: array[0 .. 4095] of byte;	{ 4 KB of nametables }
 	no_vbl		: boolean;	{ a read just before kept it from being set }
 	hit_at		: longint;
 	over_at		: longint;
-	ctrl		: longint;
-	oam_addr	: longint;
-	latch		: longint;
-	vaddr, taddr	: longint;	{ loopy v and t }
-	fine_x		: longint;
-	w		: boolean;
-	buffer		: longint;	{ $2007's read buffer }
-	a12		: boolean;	{ the address line A12 as the board sees it }
+	ctrl		: U16;
+	oam_addr	: U16;
+	latch		: U16;
+	vaddr, taddr: U16;		{ loopy v and t }
+	fine_x		: U16;
+	w			: boolean;
+	buffer		: U16;		{ $2007's read buffer }
+	a12			: boolean;	{ the address line A12 as the board sees it }
 	{ the sprites the line before found for this line, and for the next }
-	cur_n, next_n	: longint;
-	cur_spr		: array[0 .. 63] of byte;
-	next_spr	: array[0 .. 63] of byte;
+	cur_n,
+	next_n		: longint;
+	cur_spr		: SPR_LIST;
+	next_spr	: SPR_LIST;
 	cur_zero	: boolean;
 	next_zero	: boolean;
 	{ two pattern bytes to eight pixels: SPREAD[b][i] is bit 7-i of b,
@@ -141,35 +160,44 @@ var	vram		: array[0 .. 4095] of byte;	{ 4 KB of nametables }
 	sp_colour	: array[0 .. 31] of byte;
 	bg_row		: array[0 .. 1] of PBYTE;	{ the line's nametable row, then the next table's }
 	bg_attr		: array[0 .. 1] of PBYTE;	{ their attribute rows }
-	bg_x		: longint;			{ the column the line starts at }
-	attr_y		: longint;			{ 0 or 4: the attribute's shift by the row }
+	bg_x		: U16;				{ the column the line starts at }
+	attr_y		: U16;			{ 0 or 4: the attribute's shift by the row }
 	row_now		: PBYTE;
 	attr_now	: PBYTE;
-	colours_grey	: longint;			{ the mask bg_colour was made with, -1 none }
+	colours_grey: longint;			{ the mask bg_colour was made with, -1 none }
 	{ the first 8 sprites of each line (and how many were looked at) as
 	  OAM has them, made again when it or the sprites' height changes }
 	line_spr	: array[0 .. PPU_H - 1, 0 .. 7] of byte;
 	line_n		: array[0 .. PPU_H - 1] of byte;
 	line_scan	: array[0 .. PPU_H - 1] of byte;
 	lines_h		: longint;			{ the height they were made for, 0 none }
-	sp_from, sp_to	: longint;		{ the span the sprites drew in }
+	sp_from,
+	sp_to		: longint;		{ the span the sprites drew in }
 	drawn_line	: longint;		{ the line render_line drew last, -1 none }
 	redrawing	: boolean;		{ render_line drawing a line again: no side effects }
 	redraw_out	: array[0 .. PPU_W - 1] of byte;
 
 	{ the background's lines kept: by nametable (of the 4 KB), row, fine
 	  y; what each was made from; the colours made from its pixels with }
-const	NT_LINES	= 4 * 30 * 8;
-type	LINE_KEY	= record
+const
+	NT_LINES	= 4 * 30 * 8;
+	
+type
+	LINE_KEY	= record
 		gen, half, row	: longint;
 		slot, slot_gen	: array[0 .. 3] of longint;
 	end;
-var	nt_pix		: array[0 .. NT_LINES - 1, 0 .. PPU_W - 1] of byte;
-	nt_col		: array[0 .. NT_LINES - 1, 0 .. PPU_W - 1] of byte;
-	nt_key		: array[0 .. NT_LINES - 1] of LINE_KEY;
+	NT_KEYS		= array[0 .. NT_LINES - 1] of LINE_KEY;
+
+{ in blocks of 240 lines: no compiler's block holds them all in 16 bits }
+var
+	nt_pix		: array[0 .. 3] of PPPU_PICTURE;
+	nt_col		: array[0 .. 3] of PPPU_PICTURE;
+	nt_key		: ^NT_KEYS;
 	nt_colours	: array[0 .. NT_LINES - 1] of longint;
 	row_gen		: array[0 .. 3, 0 .. 29] of longint;	{ by nametable row: its writes }
 	bg_slot		: array[0 .. 7] of PBYTE;	{ the background's CHR slots for the line }
+	bg_page		: array[0 .. 7] of longint;	{ and their pages }
 	chr_gen		: array[0 .. 255] of longint;		{ by KB of CHR RAM: its writes }
 	cache_gen	: longint;	{ every line made before a change of it is stale }
 	line_vbl	: longint;	{ the region's: VBlank's line, the pre-render line, all }
@@ -183,7 +211,7 @@ var	nt_pix		: array[0 .. NT_LINES - 1, 0 .. PPU_W - 1] of byte;
 function	dot_of(c: longint): longint;
 begin
 	if ppu_region = TV_PAL then dot_of := c * 16 div 5 + PPU_ALIGN
-	else	dot_of := c * 3 + PPU_ALIGN;
+	else	dot_of := c + c + c + PPU_ALIGN;	{ adds: BP7 multiplies a longint by a call }
 end;
 
 { the first CPU cycle at least x dots on (x = a dot less PPU_ALIGN) }
@@ -205,49 +233,48 @@ end;
 { ---- memory ---- }
 
 { the 1 KB of vram nametable k is }
-function	nt_of(k: longint): longint;
+function	nt_of(k: U16): U16;
 begin
 	nt_of := NT_MAP[mirroring][k];
 end;
 
-function	nt_offset(addr: longint): longint;
+function	nt_offset(addr: U16): U16;
 begin
 	nt_offset := nt_of((addr shr 10) and 3) shl 10 + (addr and $3FF);
 end;
 
-function	pal_index(addr: longint): longint;
-var	i	: longint;
+function	pal_index(addr: U16): U16;
+var	i	: U16;
 begin
 	i := addr and $1F;
 	if i and $13 = $10 then i := i and $0F;
 	pal_index := i;
 end;
 
-function	mem(addr: longint): longint;
+function	mem(addr: U16): U16;
 begin
 	addr := addr and $3FFF;
 	if addr < $2000 then
 	begin
-		mem := (chr_slot[addr shr 10] + (addr and $3FF))^;
+		mem := PBYTES(chr_slot[addr shr 10])^[addr and $3FF];
 	end
 	else if addr < $3F00 then mem := vram[nt_offset(addr)]
 	else	mem := pal[pal_index(addr)];
 end;
 
 { a write; a change marks what the kept lines were made from }
-procedure	mem_write(addr, v: longint);
-var	p, o, i	: longint;
+procedure	mem_write(addr, v: U16);
+var	p, o, i	: U16;
 	b	: PBYTE;
 begin
 	addr := addr and $3FFF;
 	if addr < $2000 then
 	begin
 		if not chr_rw[addr shr 10] then exit;
+		i := chr_page[addr shr 10] and 255;
 		b := chr_slot[addr shr 10];
-		i := ((PTRVAL(b) - PTRVAL(board^.chr_mem)) shr 10) and 255;
-		b := b + (addr and $3FF);
-		if b^ = v then exit;
-		b^ := v;
+		if PBYTES(b)^[addr and $3FF] = v then exit;
+		PBYTES(b)^[addr and $3FF] := v;
 		inc(chr_gen[i]);
 	end
 	else if addr < $3F00 then
@@ -292,7 +319,7 @@ end;
 { ---- the scroll registers' steps while rendering ---- }
 
 procedure	y_increment;
-var	y	: longint;
+var	y	: U16;
 begin
 	if vaddr and $7000 <> $7000 then inc(vaddr, $1000)
 	else
@@ -317,8 +344,8 @@ end;
   sprite); dots from 65, two a sprite looked at, eight one taken }
 { line_spr and the rest from OAM: each sprite into the lines it covers,
   in its order, 8 a line }
-procedure	make_lines(h: longint);
-var	n, r, l, c	: longint;
+procedure	make_lines(h: U16);
+var	n, r, l, c	: U16;
 begin
 	fillchar(line_n, sizeof(line_n), 0);
 	fillchar(line_scan, sizeof(line_scan), 64);
@@ -339,7 +366,8 @@ begin
 end;
 
 procedure	evaluate(l: longint);
-var	n, m, h, d, y	: longint;
+var	n, m, h	: U16;
+	d, y	: longint;
 begin
 	if ctrl and $20 <> 0 then h := 16 else h := 8;
 	if lines_h <> h then make_lines(h);
@@ -366,45 +394,52 @@ begin
 end;
 
 
-{ a tile's eight pixels into dest: the low pattern byte's bit 0, the high
-  one's bit 1 (by table, SPREAD and SPREAD_HI), the attribute's bits 2-3
-  (where both pattern bits are clear the pixel shows nothing all the
-  same); base is the pattern table plus fine y }
-procedure	tile_pixels(dest: PBYTE; tile, attr, base: longint; slots: PSLOTS);
-var	a, i, lo, hi, ab	: longint;
-	p			: PBYTE;
+{ a tile's eight pixels into dest from x on: the low pattern byte's bit
+  0, the high one's bit 1 (by table, SPREAD and SPREAD_HI), the
+  attribute's bits 2-3 (where both pattern bits are clear the pixel shows
+  nothing all the same); base is the pattern table plus fine y.  The
+  eight written out, not looped: no counter to step and test }
+procedure	tile_pixels(dest: PBYTES; x, tile, attr, base: U16; slots: PSLOTS);
+var	a, lo, hi, ab	: U16;
+	p		: PBYTES;
 begin
 	a := tile shl 4 + base;
-	p := slots^[a shr 10] + (a and $3FF);
-	lo := p^;
-	hi := (p + 8)^;
+	p := PBYTES(slots^[a shr 10]);
+	a := a and $3FF;
+	lo := p^[a];
+	hi := p^[a + 8];
 	ab := attr shl 2;
-	for i := 0 to 7 do
-		(dest + i)^ := SPREAD[lo, i] or SPREAD_HI[hi, i] or ab;
+	dest^[x] := SPREAD[lo, 0] or SPREAD_HI[hi, 0] or ab;
+	dest^[x + 1] := SPREAD[lo, 1] or SPREAD_HI[hi, 1] or ab;
+	dest^[x + 2] := SPREAD[lo, 2] or SPREAD_HI[hi, 2] or ab;
+	dest^[x + 3] := SPREAD[lo, 3] or SPREAD_HI[hi, 3] or ab;
+	dest^[x + 4] := SPREAD[lo, 4] or SPREAD_HI[hi, 4] or ab;
+	dest^[x + 5] := SPREAD[lo, 5] or SPREAD_HI[hi, 5] or ab;
+	dest^[x + 6] := SPREAD[lo, 6] or SPREAD_HI[hi, 6] or ab;
+	dest^[x + 7] := SPREAD[lo, 7] or SPREAD_HI[hi, 7] or ab;
 end;
 
 { tile col's attribute in the row attr_now, attr_y points to: 0-3 }
-function	tile_attr(col: longint): longint;
+function	tile_attr(col: U16): U16;
 begin
-	tile_attr := ((attr_now + col shr 2)^ shr ((col and 2) + attr_y)) and 3;
+	tile_attr := (PBYTES(attr_now)^[col shr 2] shr ((col and 2) + attr_y)) and 3;
 end;
 
 { the 33 tiles of a line into bg_line, fine x off the first; base is
   the pattern table plus fine y.  The nametable's row and attribute row
   (bg_row, bg_attr, the second pair for the nametable the line runs into)
   and the column to start at (bg_x) made by render_line }
-procedure	bg_tiles(base: longint);
-var	col, t	: longint;
-	dest	: PBYTE;
+procedure	bg_tiles(base: U16);
+var	col, t, x	: U16;
 begin
 	col := bg_x;
 	row_now := bg_row[0];
 	attr_now := bg_attr[0];
-	dest := @bg_line[8 - fine_x];
+	x := 8 - fine_x;
 	for t := 1 to 33 do
 	begin
-		tile_pixels(dest, (row_now + col)^, tile_attr(col), base, @bg_slot);
-		dest := dest + 8;
+		tile_pixels(@bg_line, x, PBYTES(row_now)^[col], tile_attr(col), base, @bg_slot);
+		inc(x, 8);
 		{ the next column, into the next nametable at the edge }
 		inc(col);
 		if col = 32 then
@@ -416,18 +451,16 @@ begin
 	end;
 end;
 
-{ a sprite's row: its eight pixels (lo, hi already flipped when it is)
-  into p where nothing is yet, from the pixel first on; value, the
-  palette and the flags, ored in }
-procedure	sprite_row(p: PBYTE; lo, hi, value, first: longint);
-var	i, px	: longint;
-	q	: PBYTE;
+{ a sprite's row: its eight pixels (lo, hi already flipped when it is,
+  spread by table) into sp_line from x where nothing is yet, from the
+  pixel first on; value, the palette and the flags, ored in }
+procedure	sprite_row(x, lo, hi, value: U16; first: longint);
+var	i, px	: U16;
 begin
 	for i := 0 to 7 do
 	begin
-		px := ((hi shr (7 - i)) and 1) shl 1 or ((lo shr (7 - i)) and 1);
-		q := p + i;
-		if (px <> 0) and (i >= first) and (q^ = 0) then q^ := (px or value) and $FF;
+		px := SPREAD_HI[hi, i] or SPREAD[lo, i];
+		if (px <> 0) and (i >= first) and (sp_line[x + i] = 0) then sp_line[x + i] := (px or value) and $FF;
 	end;
 end;
 
@@ -438,47 +471,59 @@ procedure	compose(out: PBYTE; x0, x1: longint; kept: boolean);
 var	x, s	: longint;
 begin
 	if not kept then
-		for x := 0 to PPU_W - 1 do (out + x)^ := bg_colour[bg_line[8 + x]];
+		for x := 0 to PPU_W - 1 do PBYTES(out)^[x] := bg_colour[bg_line[8 + x]];
 	for x := x0 to x1 - 1 do
 	begin
 		s := sp_line[x];
 		if s = 0 then continue;
 		{ behind the background: shown only where it shows nothing }
 		if (s and $40 <> 0) and (bg_line[8 + x] and 3 <> 0) then continue;
-		(out + x)^ := sp_colour[s and $1F];
+		PBYTES(out)^[x] := sp_colour[s and $1F];
 	end;
 end;
 
 { a nametable row's 32 tiles from row_now, attr_now, attr_y into dest,
   as bg_tiles does: base the pattern table plus fine y }
-procedure	nt_tiles(base: longint; dest: PBYTE);
-var	col	: longint;
+procedure	nt_tiles(base: U16; dest: PBYTES);
+var	col	: U16;
 begin
 	for col := 0 to 31 do
-		tile_pixels(dest + col * 8, (row_now + col)^, tile_attr(col), base, @bg_slot);
+		tile_pixels(dest, col * 8, PBYTES(row_now)^[col], tile_attr(col), base, @bg_slot);
 end;
 
 { 256 pixels' colours: out[i] := bg_colour[pix[i]] }
 procedure	nt_colour(pix, out: PBYTE);
-var	i	: longint;
+var	i	: U16;
 begin
-	for i := 0 to PPU_W - 1 do (out + i)^ := bg_colour[(pix + i)^];
+	for i := 0 to PPU_W - 1 do PBYTES(out)^[i] := bg_colour[PBYTES(pix)^[i]];
+end;
+
+{ kept line e's pixels and colours }
+function	pix_line(e: U16): PBYTE;
+begin
+	pix_line := @nt_pix[e div PPU_H]^[e mod PPU_H, 0];
+end;
+
+function	col_line(e: U16): PBYTE;
+begin
+	col_line := @nt_col[e div PPU_H]^[e mod PPU_H, 0];
 end;
 
 { the kept line of nametable p, row r, fine y fy (pattern table half),
   made again if stale, coloured as the palette is now }
-function	nt_line(p, r, fy, hf: longint): longint;
-var	e, k, g, sl	: longint;
+function	nt_line(p, r, fy, hf: U16): U16;
+var	e, k	: U16;
+	g, sl	: longint;
 	fresh		: boolean;
 	key		: ^LINE_KEY;
 begin
 	e := (p * 30 + r) * 8 + fy;
-	key := @nt_key[e];
+	key := @nt_key^[e];
 	fresh := (key^.gen = cache_gen) and (key^.half = hf) and (key^.row = row_gen[p, r]);
 	for k := 0 to 3 do
 	begin
-		sl := longint(PTRVAL(bg_slot[hf * 4 + k]));
-		g := chr_gen[((sl - longint(PTRVAL(board^.chr_mem))) shr 10) and 255];
+		sl := bg_page[hf * 4 + k];
+		g := chr_gen[sl and 255];
 		if (key^.slot[k] <> sl) or (key^.slot_gen[k] <> g) then
 		begin
 			fresh := FALSE;
@@ -491,7 +536,7 @@ begin
 		row_now := @vram[p shl 10 + r * 32];
 		attr_now := @vram[p shl 10 + $3C0 + (r shr 2) * 8];
 		attr_y := (r and 2) * 2;
-		nt_tiles(hf shl 12 + fy, @nt_pix[e]);
+		nt_tiles(hf shl 12 + fy, PBYTES(pix_line(e)));
 		key^.gen := cache_gen;
 		key^.half := hf;
 		key^.row := row_gen[p, r];
@@ -499,20 +544,20 @@ begin
 	end;
 	if nt_colours[e] <> pal_gen shl 8 + colours_grey then
 	begin
-		nt_colour(@nt_pix[e], @nt_col[e]);
+		nt_colour(pix_line(e), col_line(e));
 		nt_colours[e] := pal_gen shl 8 + colours_grey;
 	end;
 	nt_line := e;
 end;
 
 procedure	render_line;
-var	k, x, a, lo, hi, attr, tile, row, h, n, at, c, first, value	: longint;
-	ea, eb	: longint;
+var	k, a, lo, hi, attr, tile, row, h, at, c, value	: U16;
+	ea, eb, grey	: U16;
+	x, n, first	: longint;	{ loops that may end at -1: longint }
 	show_bg, show_sp, kept	: boolean;
 	out		: PBYTE;
-	grey		: longint;
 begin
-	out := @ppu_screen[line, 0];
+	out := @ppu_screen^[line, 0];
 	if redrawing then out := @redraw_out;
 	if ppu_mask and 1 <> 0 then grey := $30 else grey := $3F;
 	if not rendering then
@@ -529,6 +574,7 @@ begin
 	kept := FALSE;
 	show_sp := ppu_mask and $10 <> 0;
 	move(chr_slot, bg_slot, sizeof(bg_slot));
+	move(chr_page, bg_page, sizeof(bg_page));
 	if grey <> colours_grey then
 	begin
 		for k := 0 to 15 do
@@ -559,9 +605,9 @@ begin
 				if row >= 8 then inc(a, 16 + row - 8) else inc(a, row);
 			end
 			else	a := (ctrl and $08) shl 9 + tile shl 4 + row;
-			lo := (chr_slot[a shr 10] + (a and $3FF))^;
+			lo := PBYTES(chr_slot[a shr 10])^[a and $3FF];
 			a := a + 8;
-			hi := (chr_slot[a shr 10] + (a and $3FF))^;
+			hi := PBYTES(chr_slot[a shr 10])^[a and $3FF];
 			x := oam[at + 3];
 			if attr and $40 <> 0 then
 			begin
@@ -572,7 +618,7 @@ begin
 			if cur_spr[n] = 0 then value := value or $80;
 			first := 0;
 			if ppu_mask and $04 = 0 then first := 8 - x;
-			sprite_row(@sp_line[x], lo, hi, value, first);
+			sprite_row(x, lo, hi, value, first);
 			if x < sp_from then sp_from := x;
 			if x + 8 > sp_to then sp_to := x + 8;
 		end;
@@ -586,17 +632,17 @@ begin
 		k := (vaddr shr 10) and 3;
 		ea := nt_line(nt_of(k), row, (vaddr shr 12) and 7, (ctrl shr 4) and 1);
 		x := (vaddr and 31) * 8;
-		move(nt_pix[ea, x], bg_line[8 - fine_x], PPU_W - x);
+		move(PBYTES(pix_line(ea))^[x], bg_line[8 - fine_x], PPU_W - x);
 		{ the next table's line, unless the picture starts on a tile's
 		  edge at its left: then none of it shows }
 		if x + fine_x > 0 then
 		begin
 			eb := nt_line(nt_of(k xor 1), row, (vaddr shr 12) and 7, (ctrl shr 4) and 1);
-			move(nt_pix[eb, 0], bg_line[8 - fine_x + PPU_W - x], 8 + x);
+			move(pix_line(eb)^, bg_line[8 - fine_x + PPU_W - x], 8 + x);
 		end;
 		x := x + fine_x;
-		move(nt_col[ea, x], out^, PPU_W - x);
-		if x > 0 then move(nt_col[eb, 0], (out + PPU_W - x)^, x);
+		move(PBYTES(col_line(ea))^[x], out^, PPU_W - x);
+		if x > 0 then move(col_line(eb)^, PBYTES(out)^[PPU_W - x], x);
 		if ppu_mask and $02 = 0 then
 		begin
 			fillchar(bg_line[8], 8, 0);
@@ -609,10 +655,10 @@ begin
 		for k := 0 to 3 do nt_page[k] := @vram[nt_of(k) shl 10];
 		row := (vaddr shr 5) and 31;
 		k := (vaddr shr 10) and 3;
-		bg_row[0] := nt_page[k] + row * 32;
-		bg_attr[0] := nt_page[k] + $3C0 + (row shr 2) * 8;
-		bg_row[1] := nt_page[k xor 1] + row * 32;
-		bg_attr[1] := nt_page[k xor 1] + $3C0 + (row shr 2) * 8;
+		bg_row[0] := padd(nt_page[k], row * 32);
+		bg_attr[0] := padd(nt_page[k], $3C0 + (row shr 2) * 8);
+		bg_row[1] := padd(nt_page[k xor 1], row * 32);
+		bg_attr[1] := padd(nt_page[k xor 1], $3C0 + (row shr 2) * 8);
 		attr_y := (row and 2) * 2;
 		bg_x := vaddr and 31;
 		bg_tiles((ctrl and $10) shl 8 + (vaddr shr 12) and 7);
@@ -876,13 +922,14 @@ begin
 	render_line;
 	redrawing := FALSE;
 	vaddr := v0;
-	move(redraw_out[x0], ppu_screen[line, x0], PPU_W - x0);
+	move(redraw_out[x0], ppu_screen^[line, x0], PPU_W - x0);
 end;
 
 { ---- registers ---- }
 
-function	ppu_read(reg, at: longint): longint;
-var	d, r	: longint;
+function	ppu_read(reg: U16; at: longint): U16;
+var	d	: longint;
+	r	: U16;
 begin
 	ppu_run(at);
 	case reg of
@@ -925,8 +972,8 @@ begin
 	ppu_read := latch;
 end;
 
-procedure	ppu_write(reg, v, at: longint);
-var	oc	: longint;
+procedure	ppu_write(reg, v: U16; at: longint);
+var	oc	: U16;
 begin
 	ppu_run(at);
 	latch := v;
@@ -1003,6 +1050,14 @@ procedure	ppu_start;
 var	b, i	: longint;
 begin
 	if tables_made then exit;
+	{ the picture and the kept lines, each block under 64 KB }
+	ppu_screen := malloc(sizeof(PPU_PICTURE));
+	for i := 0 to 3 do
+	begin
+		nt_pix[i] := malloc(sizeof(PPU_PICTURE));
+		nt_col[i] := malloc(sizeof(PPU_PICTURE));
+	end;
+	nt_key := malloc(sizeof(NT_KEYS));
 	for b := 0 to 255 do
 	begin
 		FLIP[b] := 0;
@@ -1034,7 +1089,7 @@ begin
 	fillchar(vram, sizeof(vram), 0);
 	move(POWER_PAL, pal, 32);
 	fillchar(oam, sizeof(oam), 0);
-	fillchar(ppu_screen, sizeof(ppu_screen), 0);
+	fillchar(ppu_screen^, sizeof(PPU_PICTURE), 0);
 	drawn_line := -1;
 	redrawing := FALSE;
 	frame_start := 0;
@@ -1070,7 +1125,7 @@ begin
 	lines_h := 0;
 	fillchar(next_spr, sizeof(next_spr), 0);
 	next_dot := event_dot;
-	fillchar(nt_key, sizeof(nt_key), 0);
+	fillchar(nt_key^, sizeof(NT_KEYS), 0);
 	fillchar(row_gen, sizeof(row_gen), 0);
 	fillchar(chr_gen, sizeof(chr_gen), 0);
 	cache_gen := 1;

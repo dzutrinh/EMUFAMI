@@ -8,11 +8,14 @@
 	sees no keys; taken out however the program ends.
 -*}
 {$X+}
+{$ifdef VER70}{$F+}{$endif}
+{$S-}		{ no stack check: the interrupt runs on the extender's stack }
 unit	f_keys;
 
 interface
 
-const	KEY_ESC		= $01;
+const
+	KEY_ESC		= $01;
 	KEY_1		= $02;
 	KEY_TAB		= $0F;
 	KEY_Q		= $10;
@@ -33,6 +36,8 @@ const	KEY_ESC		= $01;
 	KEY_SPACE	= $39;
 	KEY_F1		= $3B;
 	KEY_F2		= $3C;
+	KEY_F3		= $3D;
+	KEY_F4		= $3E;
 	KEY_HOME	= $47;
 	KEY_UP		= $48;
 	KEY_PGUP	= $49;
@@ -51,15 +56,17 @@ procedure	keys_flush;			{ the presses waiting dropped }
 
 implementation
 
-uses	f_dos;
+uses
+	f_dos;
 
-const	QSIZE	= 64;
+const
+	QSIZE	= 64;
 
 var	queue		: array[0 .. QSIZE - 1] of byte;
 	head, tail	: longint;
 	prefix		: boolean;	{ an E0 came }
 	skip		: longint;	{ Pause's bytes still to come }
-	on		: boolean;
+	on			: boolean;
 	hooked		: boolean;
 
 procedure	key_feed(scan: longint);
@@ -99,11 +106,10 @@ begin
 	end;
 end;
 
-{$S-}	{ the interrupt runs on the extender's stack }
-{$ifdef FPC}
-procedure	keys_isr; interrupt;
-{$else}
+{$ifdef __TMT__}
 procedure	keys_isr(eax, ebx, ecx, edx, esi, edi: dword); interrupt;
+{$else}
+procedure	keys_isr; interrupt;
 {$endif}
 begin
 	isr_enter;
@@ -114,7 +120,6 @@ end;
 procedure	keys_isr_end;
 begin
 end;
-{$S+}
 
 function	key_get: longint;
 begin

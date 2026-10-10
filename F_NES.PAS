@@ -2,21 +2,21 @@
 	F_NES.PAS - EMUFAMI
 	(c) 2026 Trinh D.D. Nguyen, Infinity Group
 
-	The console: a .NES on its board (mappers 0, 1, 2, 3, 4, 7, 11,
-	66), power, the reset button, a frame; the battery's RAM in
+	The console: a .NES on its board (F_MAP's map_new), power, the reset button, a frame; the battery's RAM in
 	NAME.SAV beside the ROM, read at open, written at close.
 -*}
+{$S-}		{ no stack check at every call }
 unit	f_nes;
 
 interface
 
-uses	f_cart;
+uses
+	f_cart;
 
 var	nes_cart	: CART;
 	nes_region	: longint;	{ the game's: TV_NTSC, TV_PAL or TV_DENDY }
 
 function	nes_open(const name: string): boolean;
-function	nes_has_board(mapper: longint): boolean;
 function	nes_why: string;
 procedure	nes_close;
 procedure	nes_power;
@@ -26,7 +26,8 @@ procedure	nes_save;		{ the battery's RAM to the .SAV, if any }
 
 implementation
 
-uses	f_sys, f_map, f_mmc1, f_disc, f_mmc3, f_bus, f_cpu, f_ppu, f_apu, f_pad;
+uses
+	f_sys, f_map, f_bus, f_cpu, f_ppu, f_apu, f_pad;
 
 var	why	: string;
 	sav	: string;	{ the ROM's name less its extension }
@@ -34,15 +35,6 @@ var	why	: string;
 function	nes_why: string;
 begin
 	nes_why := why;
-end;
-
-function	nes_has_board(mapper: longint): boolean;
-begin
-	case mapper of
-	0, 1, 2, 3, 4, 7, 11, 66:
-		nes_has_board := TRUE;
-	else	nes_has_board := FALSE;
-	end;
 end;
 
 function	battery: boolean;
@@ -91,24 +83,13 @@ begin
 		why := cart_why;
 		exit;
 	end;
-	case nes_cart.mapper of
-	0:	board := new(PMAPPER, Init(@nes_cart));
-	1:	board := new(PMMC1, Init(@nes_cart));
-	2:	board := new(PUXROM, Init(@nes_cart));
-	3:	board := new(PCNROM, Init(@nes_cart));
-	4:	board := new(PMMC3, Init(@nes_cart));
-	7:	board := new(PAXROM, Init(@nes_cart));
-	11:	board := new(PCOLOR, Init(@nes_cart));
-	66:	board := new(PGXROM, Init(@nes_cart));
-	else	begin
-			why := 'MAPPER ' + itoa(nes_cart.mapper) + ' IS NOT SUPPORTED';
-			cart_free(nes_cart);
-			exit;
-		end;
+	board := map_new(@nes_cart);
+	if board = nil then
+	begin
+		why := 'MAPPER ' + itoa(nes_cart.mapper) + ' IS NOT SUPPORTED';
+		cart_free(nes_cart);
+		exit;
 	end;
-	{ UxROM, CNROM, AxROM boards that AND a write with the ROM's byte:
-	  NES 2.0 submapper 2 }
-	bus_conflicts := (nes_cart.mapper in [2, 3, 7]) and (nes_cart.submapper = 2);
 	{ the .SAV beside the ROM: its name less the extension }
 	sav := name;
 	while (sav <> '') and not (sav[length(sav)] in ['.', '\', ':']) do
@@ -139,7 +120,7 @@ begin
 	bus_power;
 	board^.Reset;
 	{ a trainer's 512 bytes at $7000 }
-	if (nes_cart.trainer <> nil) and (board^.ram <> nil) then move(nes_cart.trainer^, (board^.ram + $1000)^, 512);
+	if (nes_cart.trainer <> nil) and (board^.ram <> nil) then move(nes_cart.trainer^, padd(board^.ram, $1000)^, 512);
 	cpu_power;
 end;
 

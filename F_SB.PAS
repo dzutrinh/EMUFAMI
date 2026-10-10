@@ -5,43 +5,61 @@
 	Sound Blaster: BLASTER's A, I, D; 8-bit mono DMA at 22,222 Hz,
 	the two halves round and round (DSP 2.01 up) or block by block;
 	the interrupt fills the half just played from a ring the frames
-	fill (sb_put).  No card, no sound (sb_why says why).
+	fill (sb_put).  A card whose interrupts stop is started again
+	(sb_watch); sb_silence quiets it at once.  No card, no sound
+	(sb_why says why).
 -*}
 {$X+}
+{$ifdef VER70}{$F+}{$endif}
+{$S-}		{ no stack check: the interrupt runs on the extender's stack }
 unit	f_sb;
 
 interface
 
-var	sb_rate		: longint;	{ the card's samples a second, when on }
+var
+	sb_rate		: longint;	{ the card's samples a second, when on }
 
 function	sb_start(rate: longint): boolean;	{ FALSE: no sound }
 procedure	sb_stop;
 function	sb_why: string;			{ the card found, or why none }
 procedure	sb_put(p: pointer; n: longint);	{ n 16-bit samples queued }
 function	sb_queued: longint;		{ samples waiting in the ring }
+procedure	sb_silence;			{ the ring emptied, the card quiet }
+procedure	sb_watch;			{ once a frame: a card gone silent started again }
 
 implementation
 
-uses	dos, f_sys, f_dos;
+uses
+	dos, f_sys, f_dos;
 
-const	RING	= 8192;			{ samples, a power of 2 }
+const
+	RING	= 8192;			{ samples, a power of 2 }
 	HALF	= 256;			{ samples a DMA half }
 	DMA_ADDR	: array[0 .. 3] of byte = ($00, $02, $04, $06);
 	DMA_COUNT	: array[0 .. 3] of byte = ($01, $03, $05, $07);
 	DMA_PAGE	: array[0 .. 3] of byte = ($87, $83, $81, $82);
 
-var	base, irq, dma		: longint;
-	major, minor		: longint;
+var	base, irq, dma	: longint;
+	major, minor	: longint;
+	tc				: longint;	{ the DSP's time constant for the rate }
 	auto			: boolean;
 	ring_buf		: array[0 .. RING - 1] of byte;
-	ring_head, ring_tail	: longint;	{ the card reads at head, sb_put writes at tail }
+	{ the card reads at head, sb_put writes at tail (U16: one write
+	  under BP7 too, as the interrupt may come between two) }
+	ring_head,
+	ring_tail		: U16;
 	last			: byte;
 	half_buf		: array[0 .. HALF - 1] of byte;	{ a half made, then copied below 1 MB }
+	quiet			: array[0 .. HALF - 1] of byte;	{ a half of silence }
+	irqs			: longint;	{ the interrupts taken }
+	watch_irqs,
+	watch_frames	: longint;	{ sb_watch's: irqs it saw, frames since they moved }
 	phys, sel		: longint;	{ the DMA buffer: its linear address, its handle }
-	vec			: longint;
+	vec				: longint;
 	was_masked		: boolean;
-	on, ready, hooked	: boolean;
-	why			: string;
+	on, ready,
+	hooked			: boolean;
+	why				: string;
 
 function	inb(p: longint): longint;
 begin
@@ -123,7 +141,8 @@ begin
 end;
 
 function	hex3(v: longint): string;
-const	DIGITS	: string[16] = '0123456789ABCDEF';
+const
+	DIGITS	: string[16] = '0123456789ABCDEF';
 begin
 	hex3 := DIGITS[(v shr 8) and 15 + 1] + DIGITS[(v shr 4) and 15 + 1] + DIGITS[v and 15 + 1];
 end;
@@ -138,27 +157,31 @@ begin
 	sb_queued := (ring_tail - ring_head) and (RING - 1);
 end;
 
+type
+	SAMPLES	= array[0 .. 8191] of smallint;
+	PSAMPLES	= ^SAMPLES;
+
+{ each sample's high byte, made unsigned (the low 8 bits of s shr 8 are
+  the same for word and longint, so no 32-bit shift under BP7) }
 procedure	sb_put(p: pointer; n: longint);
-var	i, t	: longint;
-	s	: ^smallint;
+var	i	: longint;
+	t	: U16;
 begin
 	if not on then exit;
-	s := p;
 	t := ring_tail;
-	for i := 1 to n do
+	for i := 0 to n - 1 do
 	begin
 		{ full: the rest dropped }
 		if ((t + 1) and (RING - 1)) = ring_head then break;
-		ring_buf[t] := ((s^ shr 8) + 128) and $FF;
+		ring_buf[t] := ((U16(PSAMPLES(p)^[i]) shr 8) + 128) and $FF;
 		t := (t + 1) and (RING - 1);
-		inc(s);
 	end;
 	ring_tail := t;
 end;
 
 { HALF samples from the ring into half h of the DMA buffer }
 procedure	fill(h: longint);
-var	i, k	: longint;
+var	i, k	: U16;
 begin
 	k := ring_head;
 	for i := 0 to HALF - 1 do
@@ -171,7 +194,7 @@ begin
 		half_buf[i] := last;
 	end;
 	ring_head := k;
-	low_put(phys + h * HALF, half_buf, HALF);
+	block_put(sel, phys, h * HALF, half_buf, HALF);
 end;
 
 procedure	dma_program(bytes: longint; loop: boolean);
@@ -212,15 +235,15 @@ begin
 	outb($20, $20);
 end;
 
-{$S-}	{ the interrupt runs on the extender's stack }
-{$ifdef FPC}
-procedure	sb_isr; interrupt;
-{$else}
+{$ifdef __TMT__}
 procedure	sb_isr(eax, ebx, ecx, edx, esi, edi: dword); interrupt;
+{$else}
+procedure	sb_isr; interrupt;
 {$endif}
 begin
 	isr_enter;
 	inb(base + $E);			{ the card's interrupt taken }
+	inc(irqs);
 	if ready then
 		if auto then
 		begin
@@ -238,7 +261,6 @@ end;
 procedure	sb_isr_end;
 begin
 end;
-{$S+}
 
 procedure	pic_line(var p, bit: longint);
 begin
@@ -295,6 +317,63 @@ begin
 	dos_buffer := TRUE;
 end;
 
+{ the card going: the speaker on, the rate, the DMA round and round (DSP
+  2.01 up) or a block, its interrupt let through }
+procedure	go;
+begin
+	dsp_write($D1);
+	dsp_write($40);
+	dsp_write(tc);
+	if auto then
+	begin
+		dma_program(2 * HALF, TRUE);
+		unmask;
+		ready := TRUE;
+		dsp_write($48);
+		dsp_write((HALF - 1) and $FF);
+		dsp_write((HALF - 1) shr 8);
+		dsp_write($1C);
+	end
+	else
+	begin
+		single;
+		unmask;
+		ready := TRUE;
+	end;
+end;
+
+procedure	sb_silence;
+begin
+	if not on then exit;
+	ring_tail := ring_head;
+	last := 128;
+	block_put(sel, phys, 0, quiet, HALF);
+	block_put(sel, phys, HALF, quiet, HALF);
+end;
+
+{ no interrupt for 10 frames (one comes every 12 ms): the DSP reset, a
+  lost end of interrupt sent to the PIC, the DMA started again; what
+  queued up meanwhile dropped, else it would play late }
+procedure	sb_watch;
+begin
+	if not on then exit;
+	if irqs <> watch_irqs then
+	begin
+		watch_irqs := irqs;
+		watch_frames := 0;
+		exit;
+	end;
+	inc(watch_frames);
+	if watch_frames < 10 then exit;
+	watch_frames := 0;
+	ready := FALSE;
+	ring_tail := ring_head;
+	dsp_reset;
+	outb($0A, dma or 4);
+	eoi;
+	go;
+end;
+
 procedure	sb_stop;
 begin
 	if not on then exit;
@@ -318,7 +397,6 @@ end;
 
 function	sb_start(rate: longint): boolean;
 var	env	: string;
-	tc	: longint;
 begin
 	sb_start := FALSE;
 	if on then exit;
@@ -356,12 +434,15 @@ begin
 		why := 'NO DOS MEMORY FOR SOUND';
 		exit;
 	end;
-	fillchar(half_buf, HALF, 128);
-	low_put(phys, half_buf, HALF);
-	low_put(phys + HALF, half_buf, HALF);
+	fillchar(quiet, HALF, 128);
+	block_put(sel, phys, 0, quiet, HALF);
+	block_put(sel, phys, HALF, quiet, HALF);
 	ring_head := 0;
 	ring_tail := 0;
 	last := 128;
+	irqs := 0;
+	watch_irqs := 0;
+	watch_frames := 0;
 	if irq >= 8 then vec := $70 + irq - 8 else vec := 8 + irq;
 	if not hooked then on_exit({$ifdef FPC}@{$endif}sb_exit);
 	hooked := TRUE;
@@ -377,30 +458,15 @@ begin
 	lock_mem(irq, sizeof(irq));
 	lock_mem(dma, sizeof(dma));
 	lock_mem(phys, sizeof(phys));
+	lock_mem(sel, sizeof(sel));
 	lock_mem(auto, sizeof(auto));
 	lock_mem(ready, sizeof(ready));
+	lock_mem(irqs, sizeof(irqs));
 	vec_take(vec, @sb_isr, @inb, @sb_isr_end);
 	on := TRUE;
-	dsp_write($D1);			{ the speaker on }
-	dsp_write($40);
-	dsp_write(tc);
-	if auto then
-	begin
-		dma_program(2 * HALF, TRUE);
-		unmask;
-		ready := TRUE;
-		dsp_write($48);
-		dsp_write((HALF - 1) and $FF);
-		dsp_write((HALF - 1) shr 8);
-		dsp_write($1C);
-	end
-	else
-	begin
-		single;
-		unmask;
-		ready := TRUE;
-	end;
-	why := 'SB ' + itoa(major) + '.' + itoa(minor div 10) + itoa(minor mod 10) + ' A' + hex3(base) + ' I' + itoa(irq) + ' D' + itoa(dma);
+	go;
+	why := 'SB ' + itoa(major) + '.' + itoa(minor div 10) + itoa(minor mod 10) + ' A' + hex3(base)
+		+ ' I' + itoa(irq) + ' D' + itoa(dma);
 	sb_start := TRUE;
 end;
 

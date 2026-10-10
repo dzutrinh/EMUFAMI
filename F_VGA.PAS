@@ -8,17 +8,21 @@
 	text in the BIOS's 8x8 font.
 -*}
 {$X+}
+{$ifdef VER70}{$F+}{$endif}
 unit	f_vga;
 
 interface
 
-uses	f_sys;
+uses
+	f_sys;
 
-const	VGA_W		= 256;
+const
+	VGA_W		= 256;
 	VGA_H		= 240;
 	VGA_SIZE	= VGA_W * VGA_H;
 
-type	PSCREEN	= ^SCREEN;
+type
+	PSCREEN	= ^SCREEN;
 	SCREEN	= array[0 .. VGA_H - 1, 0 .. VGA_W - 1] of byte;
 
 function	vga_present: boolean;		{ a VGA, by the BIOS }
@@ -33,9 +37,11 @@ procedure	vga_bar(buf: PSCREEN; x, y, w, h, c: longint);
 
 implementation
 
-uses	dos, f_dos;
+uses
+	f_dos;
 
-const	TWEAK_MISC	= $E3;
+const
+	TWEAK_MISC	= $E3;
 	{ the CRTC by index: horizontal from Tweak's 256-wide modes,
 	  vertical from Mode X's 480 lines }
 	TWEAK_CRTC	: array[0 .. 17, 0 .. 1] of byte = (
@@ -48,31 +54,32 @@ var	font	: array[0 .. 127, 0 .. 7] of byte;
 	active	: boolean;
 	hooked	: boolean;
 
+{ the display combination (INT 10h 1A00h): a VGA, colour or mono }
 function	vga_present: boolean;
-var	r	: registers;
+var	ax, bx, es, bp	: longint;
 begin
-	fillchar(r, sizeof(r), 0);
-	r.ax := $1A00;
-	intr($10, r);
-	vga_present := (r.al = $1A) and ((r.bl = 7) or (r.bl = 8));
+	ax := $1A00;
+	bx := 0;
+	real_int($10, ax, bx, es, bp);
+	vga_present := (ax and $FF = $1A) and ((bx and $FF = 7) or (bx and $FF = 8));
 end;
 
 procedure	set_mode(m: longint);
-var	r	: registers;
+var	ax, bx, es, bp	: longint;
 begin
-	fillchar(r, sizeof(r), 0);
-	r.ax := m;
-	intr($10, r);
+	ax := m;
+	bx := 0;
+	real_int($10, ax, bx, es, bp);
 end;
 
+{ the VGA BIOS's 8x8 font (INT 10h 1130h, BH 3): its first 128 }
 procedure	read_font;
-var	r	: registers;
+var	ax, bx, es, bp	: longint;
 begin
-	fillchar(r, sizeof(r), 0);
-	r.ax := $1130;
-	r.bh := 3;			{ the 8x8 font's first 128 }
-	intr($10, r);
-	low_get(longint(r.es) * 16 + r.bp, font, sizeof(font));
+	ax := $1130;
+	bx := $0300;
+	real_int($10, ax, bx, es, bp);
+	low_get(es * 16 + bp, font, sizeof(font));
 end;
 
 { whatever ends the program, the screen goes back to text }

@@ -10,28 +10,34 @@
 	into apu_samples.
 -*}
 {$X+}
+{$ifdef VER70}{$N+}{$E+}{$endif}
+{$S-}		{ no stack check at every call }
 unit	f_apu;
 
 interface
 
-const	APU_MAX_SAMPLES	= 4096;
+uses	f_sys;
+
+const
+	APU_MAX_SAMPLES	= 4096;
 	APU_NEVER	= $7FFFFFFF;
 
-type	APU_READ_PROC	= function(addr: longint): longint;
+type
+	APU_READ_PROC	= function(addr: longint): longint;
 
 var	apu_samples	: array[0 .. APU_MAX_SAMPLES - 1] of smallint;
-	apu_count	: longint;	{ samples waiting in apu_samples }
-	apu_stall	: longint;	{ CPU cycles the DMC's fetches took, for the CPU to add }
-	apu_dmc_read	: APU_READ_PROC;	{ how the DMC reads CPU memory }
-	apu_pal		: boolean;	{ set before apu_power: PAL's clock and tables }
-	apu_dendy	: boolean;	{ or Dendy's clock with NTSC's tables }
+	apu_count	: longint;		{ samples waiting in apu_samples }
+	apu_stall	: longint;		{ CPU cycles the DMC's fetches took, for the CPU to add }
+	apu_dmc_read: APU_READ_PROC;{ how the DMC reads CPU memory }
+	apu_pal		: boolean;		{ set before apu_power: PAL's clock and tables }
+	apu_dendy	: boolean;		{ or Dendy's clock with NTSC's tables }
 
 procedure	apu_start;			{ the mixer's tables made (else by apu_audio) }
 procedure	apu_power;
-procedure	apu_reset(at: longint);		{ the reset button: $4015 cleared, $4017 again }
+procedure	apu_reset(at: longint);				{ the reset button: $4015 cleared, $4017 again }
 procedure	apu_run(at: longint);
 function	apu_next: longint;
-function	apu_irq_at: longint;		{ the cycle the IRQ line went high, or APU_NEVER }
+function	apu_irq_at: longint;				{ the cycle the IRQ line went high, or APU_NEVER }
 function	apu_read(addr, at: longint): longint;	{ $4015; -1 for the others }
 procedure	apu_write(addr, v, at: longint);	{ $4000-$4013, $4015, $4017 }
 procedure	apu_rebase(k: longint);
@@ -43,10 +49,10 @@ procedure	apu_set_sample_cycles(c: longint);
 
 implementation
 
-
-const	HZ_NTSC	= 1789773;
+const
+	HZ_NTSC	= 1789773;
 	HZ_PAL	= 1662607;
-	LENGTHS	: array[0 .. 31] of byte = (
+	LENGTHS		: array[0 .. 31] of byte = (
 		10, 254, 20, 2, 40, 4, 80, 6, 160, 8, 60, 10, 14, 12, 26, 14,
 		12, 16, 24, 18, 48, 20, 96, 22, 192, 24, 72, 26, 16, 28, 32, 30);
 	STEP4_NTSC	: array[0 .. 5] of longint = (7457, 14913, 22371, 29828, 29829, 29830);
@@ -58,7 +64,7 @@ const	HZ_NTSC	= 1789773;
 		(0, 1, 1, 0, 0, 0, 0, 0),
 		(0, 1, 1, 1, 1, 0, 0, 0),
 		(1, 0, 0, 1, 1, 1, 1, 1));
-	TRI_SEQ	: array[0 .. 31] of byte = (
+	TRI_SEQ		: array[0 .. 31] of byte = (
 		15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0,
 		0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
 	NOISE_NTSC	: array[0 .. 15] of longint = (
@@ -71,60 +77,87 @@ const	HZ_NTSC	= 1789773;
 		398, 354, 316, 298, 276, 236, 210, 198, 176, 148, 132, 118, 98, 78, 66, 50);
 
 { the region's, made by apu_power }
-var	CPU_HZ		: longint;
-	STEP4, STEP5	: array[0 .. 5] of longint;
-	NOISE_PERIOD	: array[0 .. 15] of longint;
+var
+	CPU_HZ		: longint;
+	STEP4, STEP5: array[0 .. 5] of longint;
+	NOISE_PERIOD: array[0 .. 15] of longint;
 	DMC_PERIOD	: array[0 .. 15] of longint;
 
-type	ENVELOPE	= record
-		start, loop, constant	: boolean;
-		volume, divider, decay	: longint;
+type
+	ENVELOPE	= record
+		start,
+		loop,
+ 		constant: boolean;
+		volume,
+		divider,
+		decay	: longint;
 	end;
 
 	PULSE	= record
-		duty, step, period	: longint;
+		duty,
+		step,
+		period		: longint;
 		len			: longint;
-		halt			: boolean;	{ the envelope's loop too }
+		halt		: boolean;	{ the envelope's loop too }
 		env			: ENVELOPE;
-		sw_on, sw_neg, sw_reload: boolean;
-		sw_period, sw_shift, sw_div	: longint;
-		ones			: longint;	{ pulse 1 negates with one's complement }
-		next, at, acc		: longint;	{ the timer; acc unused since 0.9 }
+		sw_on,
+		sw_neg,
+		sw_reload	: boolean;
+		sw_period,
+		sw_shift,
+		sw_div		: longint;
+		ones		: longint;	{ pulse 1 negates with one's complement }
+		next,
+		at,
+		acc			: longint;	{ the timer; acc unused since 0.9 }
 	end;
 
 	TRIANGLE	= record
-		period, step, len	: longint;
-		control, lin_reload	: boolean;
-		lin_value, lin		: longint;
-		next, at, acc		: longint;
+		period,
+		step,
+		len			: longint;
+		control,
+		lin_reload	: boolean;
+		lin_value,
+		lin			: longint;
+		next,
+		at,
+		acc			: longint;
 	end;
 
 	NOISE	= record
-		period, lfsr, len	: longint;
-		mode, halt		: boolean;
-		env			: ENVELOPE;
-		next, at, acc		: longint;
+		period,
+		lfsr,
+		len		: longint;
+		mode,
+		halt	: boolean;
+		env		: ENVELOPE;
+		next,
+		at,
+		acc		: longint;
 	end;
 
 	DELTA	= record
-		irq_on, loop		: boolean;
+		irq_on, loop	: boolean;
 		rate			: longint;
 		level			: longint;
-		start_addr, start_len	: longint;
+		start_addr,
+		start_len		: longint;
 		addr, left		: longint;	{ bytes left to fetch }
 		buffer			: longint;
 		full			: boolean;	{ the buffer holds a byte }
 		shift, bits		: longint;
 		silent			: boolean;
-		irq			: boolean;
+		irq				: boolean;
 		irq_time		: longint;
-		next, at, acc		: longint;
+		next, at, acc	: longint;
 	end;
 
-var	p1, p2		: PULSE;
-	tri		: TRIANGLE;
-	noi		: NOISE;
-	dmc		: DELTA;
+var
+	p1, p2		: PULSE;
+	tri			: TRIANGLE;
+	noi			: NOISE;
+	dmc			: DELTA;
 	enabled		: longint;	{ $4015's low four bits }
 	frame_irq	: boolean;
 	frame_irq_time	: longint;
@@ -166,7 +199,8 @@ begin
 		if e.decay > 0 then dec(e.decay)
 		else if e.loop then e.decay := 15;
 	end
-	else	dec(e.divider);
+	else
+		dec(e.divider);
 end;
 
 function	envelope_out(const e: ENVELOPE): longint;
@@ -178,8 +212,10 @@ function	sweep_target(const p: PULSE): longint;
 var	c	: longint;
 begin
 	c := p.period shr p.sw_shift;
-	if p.sw_neg then sweep_target := p.period - c - p.ones
-	else	sweep_target := p.period + c;
+	if p.sw_neg then
+		sweep_target := p.period - c - p.ones
+	else
+		sweep_target := p.period + c;
 end;
 
 function	pulse_muted(const p: PULSE): boolean;
@@ -200,7 +236,8 @@ begin
 		p.sw_div := p.sw_period;
 		p.sw_reload := FALSE;
 	end
-	else	dec(p.sw_div);
+	else
+		dec(p.sw_div);
 end;
 
 procedure	quarter;
@@ -378,24 +415,29 @@ type	LV8	= array[0 .. 7] of longint;
 	SUMS	= array[0 .. MIX_MAX] of longint;
 	PSUMS	= ^SUMS;
 
-var	ends		: array[0 .. MIX_MAX] of longint;	{ the samples' ends; the last open }
+var	ends			: array[0 .. MIX_MAX] of longint;	{ the samples' ends; the last open }
 	XP, DP, XT, DT	: array[0 .. MIX_MAX] of longint;
-	AN		: array[0 .. MIX_MAX] of longint;	{ the noise's sums }
-	lp, lt		: longint;	{ the groups' levels at the open sample's start }
+	AN				: array[0 .. MIX_MAX] of longint;	{ the noise's sums }
+	lp, lt			: longint;	{ the groups' levels at the open sample's start }
 	p1_out, p2_out	: longint;	{ the level each channel put in }
 	tri_out, dmc_out: longint;	{ x 3, x 1 }
-	dk		: longint;	{ the sample of the channel's last change }
+	dk				: longint;	{ the sample of the channel's last change }
 	{ steps_to's channel: its timer, step (and mask), level by step }
-	ch_next, ch_step, ch_mask, ch_len, ch_out	: longint;
-	ch_lv		: PLEVELS;
-	ch_x, ch_d	: PSUMS;
-	PL1, PL2	: LV8;	{ a pulse's levels: duty x volume }
-	TRI3		: LEVELS;		{ the triangle's x 3 }
-	p1_go, p2_go, tri_go, noi_go		: longint;	{ 0 or 1 }
-	prep_dirty				: boolean;
-	p1_vol, p2_vol, noi_vol			: longint;
-	p1_len, p2_len, tri_len			: longint;	{ timer steps in cycles }
-	noi_tap					: longint;
+	ch_next, ch_step,
+	ch_mask, ch_len,
+	ch_out			: longint;
+	ch_lv			: PLEVELS;
+	ch_x, ch_d		: PSUMS;
+	PL1, PL2		: LV8;		{ a pulse's levels: duty x volume }
+	TRI3			: LEVELS;	{ the triangle's x 3 }
+	p1_go, p2_go,
+	tri_go, noi_go	: longint;	{ 0 or 1 }
+	prep_dirty		: boolean;
+	p1_vol, p2_vol,
+	noi_vol			: longint;
+	p1_len, p2_len,
+	tri_len			: longint;	{ timer steps in cycles }
+	noi_tap			: longint;
 
 { again only after a write or a frame counter event (prep_dirty) }
 procedure	prepare;
@@ -634,8 +676,18 @@ end;
 { the n samples made: the two groups' sums by cycles averaged (8 bits
   of fraction; a sample with no change in it its level), the NES's two
   tables interpolated (0 .. 65535), the DC high pass, into apu_samples }
+{ n * 256 div c, n and c below 65536 (a sample's sum, its cycles): the
+  quotient's 256ths and the remainder's, two 16-bit divisions where BP7
+  would divide a longint by a call }
+function	avg256(n, c: U16): U16;
+begin
+	avg256 := (n div c) shl 8 + ((n mod c) shl 8) div c;
+end;
+
 procedure	mix(n: longint);
-var	i, c, s, pa, ta, x, k, d, y, from	: longint;
+var	i, c, s,
+	x, d, y, from	: longint;
+	pa, ta, k		: U16;
 begin
 	from := smp_start;
 	for i := 0 to n - 1 do
@@ -646,12 +698,12 @@ begin
 		if c <= 0 then c := 1;
 		{ the pulses' average, 8 bits of fraction }
 		if XP[i] = 0 then pa := lp * 256
-		else	pa := ((lp * c + XP[i]) * 256) div c;
+		else	pa := avg256(lp * c + XP[i], c);
 		inc(lp, DP[i]);
 		{ the rest's (the noise's sums twice: its weight) }
 		x := AN[i] * 2 + XT[i];
 		if x = 0 then ta := lt * 256
-		else	ta := ((lt * c + x) * 256) div c;
+		else	ta := avg256(lt * c + x, c);
 		inc(lt, DT[i]);
 		{ the tables, interpolated }
 		k := pa shr 8;
@@ -734,8 +786,10 @@ end;
 
 function	step_at: longint;
 begin
-	if five then step_at := seq_start + STEP5[step]
-	else	step_at := seq_start + STEP4[step];
+	if five then
+		step_at := seq_start + STEP5[step]
+	else
+		step_at := seq_start + STEP4[step];
 end;
 
 function	frame_next: longint;
@@ -762,9 +816,9 @@ begin
 	case step of
 	0, 2:	quarter;
 	1, 4:	begin
-			quarter;
-			half;
-		end;
+				quarter;
+				half;
+			end;
 	end;
 	if not five and (step >= 3) and not inhibit and not frame_irq then
 	begin
@@ -776,7 +830,8 @@ begin
 		if five then inc(seq_start, STEP5[5]) else inc(seq_start, STEP4[5]);
 		step := 0;
 	end
-	else	inc(step);
+	else
+		inc(step);
 end;
 
 procedure	apu_run(at: longint);
@@ -1123,10 +1178,12 @@ begin
 	tables_made := TRUE;
 end;
 
+{$ifdef VER70}{$F+}{$endif}	{ called through apu_dmc_read: far under BP7 }
 function	no_read(addr: longint): longint;
 begin
 	no_read := 0;
 end;
+{$ifdef VER70}{$F-}{$endif}
 
 begin
 	apu_dmc_read := {$ifdef FPC}@{$endif}no_read;

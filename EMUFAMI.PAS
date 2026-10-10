@@ -1,16 +1,24 @@
 {*+
-	EMUFAMI.PAS - EMUFAMI
-	(c) 2026 Trinh D.D. Nguyen, Infinity Group
-
+	EMUFAMI.PAS
+	-----------
 	EMUFAMI, an educational NES emulator for DOS, fully written in Pascal.
-	Support compilers: TMT Pascal, Free Pascal
+	Version 1.1
+	(c) 2026 Trinh D.D. Nguyen
+	Infinity Group
+
+	Support compilers:
+	- TMT Pascal 3.9
+	- Free Pascal 3.2
+	- Borland Pascal 7.0
 -*}
 {$X+}
+{$ifdef VER70}{$F+}{$endif}
 program	emufami;
 
 uses
 	dos,
 	f_sys,
+	f_dos,
 	f_vga,
 	f_keys,
 	f_sb,
@@ -55,16 +63,19 @@ type
 		dir		: boolean;
 		mapper	: longint;	{ -1: not iNES }
 	end;
+	ENTRY_LIST	= array[0 .. MAX_ENTRIES - 1] of ENTRY;
 
 var
 	path		: string;		{ the folder shown, ending in \ }
-	entries		: array[0 .. MAX_ENTRIES - 1] of ENTRY;
+	entries		: ^ENTRY_LIST;		{ the folder's (on the heap: 16-bit data is short) }
 	count		: longint;
 	cur, top	: longint;
 	message		: string;
-	sound_on	: boolean;
+	sound_on	: boolean;		{ a card playing }
+	muted		: boolean;		{ F3: the sound off (the card kept) }
+	show_fps	: boolean;		{ F4: frames a second shown }
 	base_cycles	: longint;		{ the APU's sample length as made }
-	scr			: SCREEN;		{ the list's and the overlays' buffer }
+	scr			: PSCREEN;		{ the list's and the overlays' buffer }
 
 { ---- the list ---- }
 
@@ -85,7 +96,7 @@ end;
 function	mapper_of(const name: string): longint;
 var	f	: file;
 	h	: array[0 .. 15] of byte;
-	got	: longint;
+	got	: RWCOUNT;
 begin
 	mapper_of := -1;
 	assign(f, name);
@@ -116,10 +127,10 @@ begin
 	count := 0;
 	if length(path) > 3 then
 	begin
-		entries[0].name := '..';
-		entries[0].dir := TRUE;
-		entries[0].mapper := -1;
-		entries[0].size := 0;
+		entries^[0].name := '..';
+		entries^[0].dir := TRUE;
+		entries^[0].mapper := -1;
+		entries^[0].size := 0;
 		count := 1;
 	end;
 	FindFirst(path + '*.*', $37, sr);
@@ -127,40 +138,42 @@ begin
 	begin
 		ext := '';
 		if length(sr.name) > 4 then ext := uppercase(copy(sr.name, length(sr.name) - 3, 4));
-		entries[count].size := sr.size;
+		entries^[count].size := sr.size;
 		if (sr.attr and $10 <> 0) and (sr.name <> '.') and (sr.name <> '..') then
 		begin
-			entries[count].name := sr.name;
-			entries[count].dir := TRUE;
-			entries[count].mapper := -1;
+			entries^[count].name := sr.name;
+			entries^[count].dir := TRUE;
+			entries^[count].mapper := -1;
 			inc(count);
 		end
 		else if (sr.attr and $10 = 0) and (ext = '.NES') then
 		begin
-			entries[count].name := sr.name;
-			entries[count].dir := FALSE;
-			entries[count].mapper := mapper_of(path + sr.name);
+			entries^[count].name := sr.name;
+			entries^[count].dir := FALSE;
+			entries^[count].mapper := mapper_of(path + sr.name);
 			inc(count);
 		end;
 		FindNext(sr);
 	end;
+{$ifndef VER70}
 	FindClose(sr);
+{$endif}
 	{ '..' first, then folders, then games, by name }
 	for i := 1 to count - 1 do
 	begin
-		e := entries[i];
+		e := entries^[i];
 		j := i - 1;
-		while (j >= 0) and (entries[j].name <> '..') and less(e, entries[j]) do
+		while (j >= 0) and (entries^[j].name <> '..') and less(e, entries^[j]) do
 		begin
-			entries[j + 1] := entries[j];
+			entries^[j + 1] := entries^[j];
 			dec(j);
 		end;
-		entries[j + 1] := e;
+		entries^[j + 1] := e;
 	end;
 	{ the cursor on the first game, if any }
 	cur := 0;
 	for i := count - 1 downto 0 do
-		if not entries[i].dir then cur := i;
+		if not entries^[i].dir then cur := i;
 	top := 0;
 end;
 
@@ -176,55 +189,55 @@ end;
 { a text ending at character column col }
 procedure	text_right(col, y: longint; const s: string; c: longint);
 begin
-	vga_text(@scr, col * 8 - 8 * length(s), y, s, c);
+	vga_text(scr, col * 8 - 8 * length(s), y, s, c);
 end;
 
 { the title band }
 procedure	title(const s: string);
 begin
-	vga_bar(@scr, 0, 0, VGA_W, 12, C_BAND);
-	vga_text(@scr, 4, 2, 'EMUFAMI', C_TITLE);
-	vga_text(@scr, 64, 2, s, C_DIM);
+	vga_bar(scr, 0, 0, VGA_W, 12, C_BAND);
+	vga_text(scr, 4, 2, 'EMUFAMI', C_TITLE);
+	vga_text(scr, 64, 2, s, C_DIM);
 end;
 
 procedure	draw_list;
 var	i, k, y, c	: longint;
 	s, sz, m	: string;
 begin
-	fillchar(scr, sizeof(scr), C_BG);
+	fillchar(scr^, sizeof(SCREEN), C_BG);
 	title(APP_VER);
 	text_right(31, 2, 'ESC QUITS', C_DIM);
-	vga_text(@scr, 4, 15, fit(path, 31), C_DIM);
-	vga_text(@scr, 8, 26, 'NAME', C_TITLE);
+	vga_text(scr, 4, 15, fit(path, 31), C_DIM);
+	vga_text(scr, 8, 26, 'NAME', C_TITLE);
 	text_right(COL_SIZE, 26, 'SIZE', C_TITLE);
 	text_right(COL_MAPPER, 26, 'MAPPER', C_TITLE);
 	if cur < top then top := cur;
 	if cur >= top + LIST_ROWS then top := cur - LIST_ROWS + 1;
-	if count = 0 then vga_text(@scr, 12, LIST_Y + 8, 'NO ROMS FOUND', C_DIM);
+	if count = 0 then vga_text(scr, 12, LIST_Y + 8, 'NO ROMS FOUND', C_DIM);
 	for i := 0 to LIST_ROWS - 1 do
 	begin
 		k := top + i;
 		if k >= count then break;
 		y := LIST_Y + i * 8;
-		if k = cur then vga_bar(@scr, 0, y, VGA_W, 8, C_BAR);
+		if k = cur then vga_bar(scr, 0, y, VGA_W, 8, C_BAR);
 		c := C_TEXT;
-		if entries[k].dir then
+		if entries^[k].dir then
 		begin
-			s := '\' + entries[k].name;
-			if entries[k].name = '..' then s := '.. (UP)';
+			s := '\' + entries^[k].name;
+			if entries^[k].name = '..' then s := '.. (UP)';
 			sz := 'DIR';
 			m := '';
 		end
 		else
 		begin
 			{ the size in KB, the mapper's number: dimmed when not played }
-			s := entries[k].name;
-			sz := itoa((entries[k].size + 1023) div 1024) + 'K';
-			if entries[k].mapper < 0 then m := '?'
-			else	m := itoa(entries[k].mapper);
-			if (entries[k].mapper < 0) or not nes_has_board(entries[k].mapper) then c := C_DIM;
+			s := entries^[k].name;
+			sz := itoa((entries^[k].size + 1023) div 1024) + 'K';
+			if entries^[k].mapper < 0 then m := '?'
+			else	m := itoa(entries^[k].mapper);
+			if (entries^[k].mapper < 0) or not map_has(entries^[k].mapper) then c := C_DIM;
 		end;
-		vga_text(@scr, 8, y, s, c);
+		vga_text(scr, 8, y, s, c);
 		text_right(COL_SIZE, y, sz, c);
 		text_right(COL_MAPPER, y, m, c);
 	end;
@@ -232,19 +245,20 @@ begin
 	if count > LIST_ROWS then
 	begin
 		y := LIST_Y + top * (LIST_ROWS * 8) div count;
-		vga_bar(@scr, VGA_W - 3, y, 2, LIST_ROWS * LIST_ROWS * 8 div count, C_DIM);
+		vga_bar(scr, VGA_W - 3, y, 2, LIST_ROWS * LIST_ROWS * 8 div count, C_DIM);
 	end;
-	vga_bar(@scr, 0, 210, VGA_W, 30, C_BAND);
-	vga_text(@scr, 4, 213, 'ENTER PLAY  F1 HELP  F2 ABOUT', C_TEXT);
-	if message <> '' then vga_text(@scr, 4, 226, fit(message, 31), C_WARN)
-	else if sound_on then vga_text(@scr, 4, 226, 'SOUND: ' + sb_why, C_DIM)
-	else	vga_text(@scr, 4, 226, 'NO SOUND: ' + fit(sb_why, 21), C_DIM);
+	vga_bar(scr, 0, 210, VGA_W, 30, C_BAND);
+	vga_text(scr, 4, 213, 'ENTER PLAY  F1 HELP  F2 ABOUT', C_TEXT);
+	if message <> '' then vga_text(scr, 4, 226, fit(message, 31), C_WARN)
+	else if sound_on and muted then vga_text(scr, 4, 226, 'SOUND: OFF', C_DIM)
+	else if sound_on then vga_text(scr, 4, 226, 'SOUND: ' + sb_why, C_DIM)
+	else	vga_text(scr, 4, 226, 'NO SOUND: ' + fit(sb_why, 21), C_DIM);
 	vga_retrace;
-	vga_flip(@scr);
+	vga_flip(scr);
 end;
 
 procedure	draw_help;
-const	LINES	: array[0 .. 19] of string[31] = (
+const	LINES	: array[0 .. 23] of string[31] = (
 		'ROM PICKER',
 		' ARROWS         NAVIGATE',
 		' HOME END       FIRST, LAST',
@@ -252,7 +266,10 @@ const	LINES	: array[0 .. 19] of string[31] = (
 		' ENTER          PLAY/OPEN',
 		' BACKSPACE      FOLDER UP',
 		' F2             ABOUT',
+		' F3             SOUND ON/OFF',
+		' F4             FPS ON/OFF',
 		' ESC            QUIT',
+		'',
 		'IN-GAME         PAD 1    PAD 2',
 		' D-PAD          ARROWS   WASD',
 		' A              X        H',
@@ -263,26 +280,27 @@ const	LINES	: array[0 .. 19] of string[31] = (
 		' P              PAUSE',
 		' F1             RESET',
 		' ESC            CLOSE',
+		'',
 		'SAVES',
 		' <NAME>.SAV NEXT TO THE GAME');
 var	i	: longint;
 begin
-	fillchar(scr, sizeof(scr), C_BG);
+	fillchar(scr^, sizeof(SCREEN), C_BG);
 	title('KEYS');
 	for i := 0 to high(LINES) do
-		if (i = 0) or (i = 8) or (i = 18) then
-			vga_text(@scr, 4, 18 + i * 9, LINES[i], C_TITLE)
+		if (i = 0) or (i = 11) or (i = 22) then
+			vga_text(scr, 4, 17 + i * 8, LINES[i], C_TITLE)
 		else
-			vga_text(@scr, 4, 18 + i * 9, LINES[i], C_TEXT);
-	vga_bar(@scr, 0, 210, VGA_W, 30, C_BAND);
-	vga_text(@scr, 4, 213, 'ANY KEY: BACK', C_TEXT);
+			vga_text(scr, 4, 17 + i * 8, LINES[i], C_TEXT);
+	vga_bar(scr, 0, 210, VGA_W, 30, C_BAND);
+	vga_text(scr, 4, 213, 'ANY KEY: BACK', C_TEXT);
 	vga_retrace;
-	vga_flip(@scr);
+	vga_flip(scr);
 end;
 
 procedure	draw_about;
 const	LINES	: array[0 .. 8] of string[31] = (
-		'AN NES EMULATOR FOR DOS',
+		'A NES EMULATOR FOR DOS',
 		'',
 		'FOR EDUCATIONAL PURPOSE ONLY',
 		'WRITTEN IN PURE PASCAL',
@@ -293,21 +311,25 @@ const	LINES	: array[0 .. 8] of string[31] = (
 		'');
 var	i	: longint;
 begin
-	fillchar(scr, sizeof(scr), C_BG);
+	fillchar(scr^, sizeof(SCREEN), C_BG);
 	title('ABOUT');
-	vga_text(@scr, 4, 20, 'EMUFAMI ' + APP_VER, C_TITLE);
-	for i := 0 to high(LINES) do vga_text(@scr, 4, 34 + i * 10, LINES[i], C_TEXT);
-	vga_text(@scr, 4, 194, 'BUILT WITH ' +
+	vga_text(scr, 4, 20, 'EMUFAMI ' + APP_VER, C_TITLE);
+	for i := 0 to high(LINES) do vga_text(scr, 4, 34 + i * 10, LINES[i], C_TEXT);
+	vga_text(scr, 4, 194, 'BUILT WITH ' +
 {$ifdef FPC}
 	'FREE'
 {$else}
+{$ifdef VER70}
+	'BORLAND'
+{$else}
 	'TMT'
 {$endif}
+{$endif}
 	+ ' PASCAL', C_DIM);
-	vga_bar(@scr, 0, 210, VGA_W, 30, C_BAND);
-	vga_text(@scr, 4, 213, 'ANY KEY: BACK', C_TEXT);
+	vga_bar(scr, 0, 210, VGA_W, 30, C_BAND);
+	vga_text(scr, 4, 213, 'ANY KEY: BACK', C_TEXT);
 	vga_retrace;
-	vga_flip(@scr);
+	vga_flip(scr);
 end;
 
 { ---- a game ---- }
@@ -343,7 +365,7 @@ end;
 procedure	frame_sound;
 var	q, target, c	: longint;
 begin
-	if not sound_on then exit;
+	if not sound_on or muted then exit;
 	sb_put(@apu_samples, apu_count);
 	apu_count := 0;
 	target := 3 * sb_rate div 60;
@@ -357,16 +379,56 @@ end;
 { the picture with a line of text over it, until a key }
 procedure	overlay(const s: string);
 begin
-	move(ppu_screen, scr, sizeof(scr));
-	vga_bar(@scr, 0, 112, VGA_W, 16, C_BAND);
-	vga_text(@scr, (VGA_W - 8 * length(s)) div 2, 116, s, C_TEXT);
+	move(ppu_screen^, scr^, sizeof(SCREEN));
+	vga_bar(scr, 0, 112, VGA_W, 16, C_BAND);
+	vga_text(scr, (VGA_W - 8 * length(s)) div 2, 116, s, C_TEXT);
 	vga_retrace;
-	vga_flip(@scr);
+	vga_flip(scr);
+end;
+
+{ the sound on or off (F3): off, the APU makes no samples (and runs the
+  faster for it), the card plays silence }
+procedure	set_sound(off: boolean);
+begin
+	muted := off;
+	if not sound_on then exit;
+	if muted then
+	begin
+		apu_audio(0);
+		sb_silence;
+	end
+	else
+	begin
+		apu_audio(sb_rate);
+		base_cycles := apu_sample_cycles;
+	end;
+end;
+
+{ the BIOS's clock at 0040:006C: 18.2 ticks a second since midnight }
+function	bios_ticks: longint;
+var	t	: longint;
+begin
+	low_get($46C, t, 4);
+	bios_ticks := t;
+end;
+
+{ a line of text in a band over the picture (the PPU draws it all again
+  next frame) }
+procedure	over_game(x: longint; const s: string);
+begin
+	vga_bar(PSCREEN(ppu_screen), x - 4, 5, 8 * length(s) + 8, 14, C_BAND);
+	vga_text(PSCREEN(ppu_screen), x, 8, s, C_TEXT);
 end;
 
 procedure	play(const name: string);
 var	k, acc, frame	: longint;
 	paused		: boolean;
+	note		: string;	{ a line shown over the game a while }
+	note_frames	: longint;
+	{ frames a second: the frames counted since fps_from (BIOS ticks),
+	  the last count, -1 none yet }
+	fps_from, fps_frames, fps, t	: longint;
+	s		: string;
 begin
 	message := '';
 	if not nes_open(name) then
@@ -376,31 +438,45 @@ begin
 	end;
 	keys_flush;
 	pal_forget;
-	if sound_on then
-	begin
-		apu_audio(sb_rate);
-		base_cycles := apu_sample_cycles;
-	end;
+	set_sound(muted);
 	acc := 0;
 	frame := 0;
 	paused := FALSE;
+	note_frames := 0;
+	fps := -1;
+	fps_frames := 0;
+	fps_from := bios_ticks;
 	repeat
+		sb_watch;
 		k := key_get;
 		if k = KEY_ESC then break;
 		if k = KEY_F1 then nes_reset;
+		if k = KEY_F3 then
+		begin
+			set_sound(not muted);
+			if muted then note := 'SOUND OFF' else note := 'SOUND ON';
+			note_frames := 90;
+		end;
+		if k = KEY_F4 then show_fps := not show_fps;
 		if k = KEY_P then
 		begin
 			paused := not paused;
-			if paused then overlay('PAUSED - P TO GO ON');
+			if paused then
+			begin
+				sb_silence;
+				overlay('PAUSED - P TO RESUME');
+			end;
 		end;
 		if paused then
 		begin
+			fps_frames := 0;		{ the count starts again after }
+			fps_from := bios_ticks;
 			vga_retrace;
 			continue;
 		end;
 		if cpu.jammed then
 		begin
-			overlay('THE GAME HALTED - ESC');
+			overlay('GAME HALTED - ESC');
 			vga_retrace;
 			continue;
 		end;
@@ -416,10 +492,36 @@ begin
 			dec(acc, 5);
 		end;
 		pal_show(ppu_emphasis);
-		vga_flip(@ppu_screen);
+		{ the frames of a second or so (18 ticks and more), rounded; the
+		  clock gone back at midnight: counted again }
+		inc(fps_frames);
+		t := bios_ticks - fps_from;
+		if t < 0 then
+		begin
+			fps_frames := 0;
+			fps_from := bios_ticks;
+		end
+		else if t >= 18 then
+		begin
+			fps := (fps_frames * 182065 + t * 5000) div (t * 10000);
+			fps_frames := 0;
+			fps_from := bios_ticks;
+		end;
+		if note_frames > 0 then
+		begin
+			over_game(8, note);
+			dec(note_frames);
+		end;
+		if show_fps and (fps >= 0) then
+		begin
+			s := itoa(fps) + ' FPS';
+			over_game(VGA_W - 8 - 8 * length(s), s);
+		end;
+		vga_flip(ppu_screen);
 	until FALSE;
 	nes_close;
-	if sound_on then apu_count := 0;
+	apu_count := 0;
+	sb_silence;
 	keys_flush;
 	pal_forget;
 end;
@@ -430,19 +532,19 @@ procedure	open_entry;
 var	i	: longint;
 begin
 	if count = 0 then exit;
-	if entries[cur].dir then
+	if entries^[cur].dir then
 	begin
-		if entries[cur].name = '..' then
+		if entries^[cur].name = '..' then
 		begin
 			i := length(path) - 1;
 			while (i > 0) and (path[i] <> '\') do dec(i);
 			path := copy(path, 1, i);
 		end
-		else	path := path + entries[cur].name + '\';
+		else	path := path + entries^[cur].name + '\';
 		scan_folder;
 		message := '';
 	end
-	else	play(path + entries[cur].name);
+	else	play(path + entries^[cur].name);
 end;
 
 { the next entry whose name starts with c, after the cursor }
@@ -452,7 +554,7 @@ begin
 	for i := 1 to count do
 	begin
 		k := (cur + i) mod count;
-		if upcase(entries[k].name[1]) = c then
+		if upcase(entries^[k].name[1]) = c then
 		begin
 			cur := k;
 			exit;
@@ -460,11 +562,12 @@ begin
 	end;
 end;
 
-const	LETTERS	: array[$10 .. $32] of char = 'QWERTYUIOP....ASDFGHJKL.....ZXCVBNM';
+const
+	LETTERS	: array[$10 .. $32] of char = 'QWERTYUIOP....ASDFGHJKL.....ZXCVBNM';
 
 procedure	picker;
 var	k	: longint;
-	page	: longint;	{ 0 the list, 1 the keys, 2 about }
+	page: longint;	{ 0 the list, 1 the keys, 2 about }
 begin
 	page := 0;
 	repeat
@@ -476,6 +579,7 @@ begin
 		k := key_get;
 		while k = 0 do
 		begin
+			sb_watch;
 			vga_retrace;
 			k := key_get;
 		end;
@@ -488,6 +592,8 @@ begin
 		KEY_ESC:	break;
 		KEY_F1:		page := 1;
 		KEY_F2:		page := 2;
+		KEY_F3:		set_sound(not muted);
+		KEY_F4:		show_fps := not show_fps;
 		KEY_UP:		if cur > 0 then dec(cur);
 		KEY_DOWN:	if cur < count - 1 then inc(cur);
 		KEY_PGUP:	begin
@@ -502,7 +608,7 @@ begin
 		KEY_HOME:	cur := 0;
 		KEY_END:	if count > 0 then cur := count - 1;
 		KEY_ENTER:	open_entry;
-		$0E:		if (count > 0) and (entries[0].name = '..') then
+		$0E:		if (count > 0) and (entries^[0].name = '..') then
 				begin
 					cur := 0;
 					open_entry;
@@ -513,13 +619,22 @@ begin
 	until FALSE;
 end;
 
-var	arg, game	: string;
+var
+	arg,
+	game	: string;
 	i		: longint;
 
 begin
 	if not vga_present then
 	begin
-		writeln('EMUFAMI needs a VGA.');
+		writeln('EMUFAMI needs a VGA adapter.');
+		halt(1);
+	end;
+	scr := malloc(sizeof(SCREEN));
+	entries := malloc(sizeof(ENTRY_LIST));
+	if (scr = nil) or (entries = nil) then
+	begin
+		writeln('EMUFAMI: not enough memory.');
 		halt(1);
 	end;
 	GetDir(0, path);
@@ -543,6 +658,8 @@ begin
 	cpu_start;
 	apu_start;
 	sound_on := sb_start(RATE);
+	muted := FALSE;
+	show_fps := FALSE;
 	keys_start;
 	vga_start;
 	ui_colours;
