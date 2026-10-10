@@ -2,7 +2,9 @@
 
 An educational NES emulator for DOS.
 
-The whole emulator is written using plain, readable Pascal syntax: the 6502, the PPU, the APU and the mappers. Compatible with **TMT Pascal 3.90** or **Free Pascal 3.2** (go32v2). 
+The whole emulator is written using plain, readable Pascal syntax: the 6502, the PPU, the APU and the mappers. Compatible with **TMT Pascal 3.90**, **Free Pascal 3.2** (go32v2) or **Borland Pascal 7.0** (16-bit protected mode). 
+
+This is a work-in-progress project for a fully functional Pascal-based NES emulator running under DOS.
 
 **NOTE:** 
 * The owners of **TMT Pascal** has removed the download of TMT Pascal 3.9 for DOS from their website. Good luck finding it, though.
@@ -41,6 +43,7 @@ EMUFAMI ROM.NES   launch ROM.NES
 | Backspace | parent folder |
 | F1| short help |
 | F2 | about |
+| F3 | sound on/off |
 | Esc | quit |
 
 | In-game | Pad 1 | Pad 2 |
@@ -51,7 +54,7 @@ EMUFAMI ROM.NES   launch ROM.NES
 | Select | Right Shift | T |
 | Start | Enter | Y |
 
-**P** pauses, **F1** resets, and **Esc** closes active ROM.
+**P** pauses, **F1** resets, **F3** turns the sound on or off, and **Esc** closes active ROM.
 
 A game's battery RAM is kept in `NAME.SAV` beside `NAME.NES`. There are no save states.
 
@@ -78,9 +81,12 @@ Supports NTSC, PAL timings.
 ```
 BUILD              EMUFAMI.EXE (default to TMT Pascal)
 BUILD FPC          EMUFAMI.EXE (Free Pascal - go32v2)
+BUILD BP           EMUFAMI.EXE (Borland Pascal 7.0 - protected mode)
 ```
 
-Small footprint, TMT-compiled binary is about 80KB and the FPC one is roughly 92KB.
+The BP7 build needs `RTM.EXE` and `DPMI16BI.OVL` (from BP7's `BIN` folder) beside it or on the `PATH`.
+
+Small footprint, TMT-compiled binary is about 80KB, the FPC one is roughly 92KB and the BP7 one about 105KB.
 
 ## ROMs
 
@@ -89,6 +95,11 @@ Small footprint, TMT-compiled binary is about 80KB and the FPC one is roughly 92
 
 Both belong to their corresponding owners. No other ROMs included.
 
+## TODOs
+- Add support for Borland Pascal.
+- More optimizations to improve framerate.
+- Support more mappers.
+
 ---
 
-by Trinh D.D. Nguyen.
+(c) 2026 Trinh D.D. Nguyen, Infinity Group.
