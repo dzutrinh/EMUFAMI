@@ -9,7 +9,7 @@ This is a part of a fully functional Pascal-based NES emulator running under DOS
 **NOTE:** 
 * The owners of **TMT Pascal** have removed the download of TMT Pascal 3.9 for DOS from their website. Good luck finding it, though.
 * **Free Pascal for DOS** (go32v2) can be downloaded at: https://www.freepascal.org/down/i386/go32v2.html
-
+* **Borland Pascal 7.0** can be downloaded at https://winworldpc.com/product/borland-pascal/7x
 * **EMUFAMI** currently supports eight mappers, keyboard control only and Sound Blaster, nothing else.
 
 ## Screenshots
