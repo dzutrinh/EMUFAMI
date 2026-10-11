@@ -7,7 +7,7 @@ The whole emulator is written using plain, readable Pascal syntax: the 6502, the
 This is a part of a fully functional Pascal-based NES emulator running under DOS. The emulator is written completely from scratch, no external dependencies needed.
 
 **NOTE:** 
-* The owners of **TMT Pascal** have removed the download of TMT Pascal 3.9 for DOS from their website. Good luck finding it, though.
+* The owners of **TMT Pascal** have removed the download of TMT Pascal 3.9 for DOS from their website. Alternate link: https://www.bttr-software.de/links/.
 * **Free Pascal for DOS** (go32v2) can be downloaded at: https://www.freepascal.org/down/i386/go32v2.html
 * **Borland Pascal 7.0** can be downloaded at https://winworldpc.com/product/borland-pascal/7x
 * **EMUFAMI** currently supports eight mappers, keyboard control only and Sound Blaster, nothing else.
