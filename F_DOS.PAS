@@ -56,20 +56,30 @@ uses	f_sys, dos, dpmi;
 const
 	VEC_MAX	= 4;
 
-var	{ the vectors taken: their numbers and old handlers }
-	vec_n	: longint;
-	vec_no	: array[0 .. VEC_MAX - 1] of longint;
+type	{ a vector taken: its number and old handler }
+	VEC_TAKEN	= record
+		vt_no	: longint;
 {$ifdef FPC}
-	vec_old	: array[0 .. VEC_MAX - 1] of tseginfo;
+		vt_old	: tseginfo;
+{$else}
+{$ifdef VER70}
+		vt_old	: pointer;
+{$else}
+		vt_old	: FarPointer;
+{$endif}
+{$endif}
+	end;
+
+var	vec_n	: longint;
+	vecs	: array[0 .. VEC_MAX - 1] of VEC_TAKEN;
+{$ifdef FPC}
 	{ the program's data segment, kept by FPC's startup code }
 	ds_alias	: word; external name '___v2prt0_ds_alias';
 {$else}
 {$ifdef VER70}
-	vec_old	: array[0 .. VEC_MAX - 1] of pointer;
 	old_exit	: pointer;
 	low_sel	: word;		{ a selector moved to the address wanted }
 {$else}
-	vec_old	: array[0 .. VEC_MAX - 1] of FarPointer;
 	old_exit: procedure;
 {$endif}
 {$endif}
@@ -219,15 +229,15 @@ var	h	: tseginfo;
 {$endif}
 begin
 	if vec_n >= VEC_MAX then exit;
-	vec_no[vec_n] := vec;
+	vecs[vec_n].vt_no := vec;
 {$ifdef FPC}
 	lock_code(code_from, PBYTE(code_to) - PBYTE(code_from));
-	get_pm_interrupt(vec, vec_old[vec_n]);
+	get_pm_interrupt(vec, vecs[vec_n].vt_old);
 	h.offset := handler;
 	h.segment := get_cs;
 	set_pm_interrupt(vec, h);
 {$else}
-	GetIntVec(vec, vec_old[vec_n]);
+	GetIntVec(vec, vecs[vec_n].vt_old);
 	SetIntVec(vec, handler);
 {$endif}
 	inc(vec_n);
@@ -237,18 +247,14 @@ procedure	vec_give(vec: longint);
 var	i, k	: longint;
 begin
 	for i := vec_n - 1 downto 0 do
-		if vec_no[i] = vec then
+		if vecs[i].vt_no = vec then
 		begin
 {$ifdef FPC}
-			set_pm_interrupt(vec, vec_old[i]);
+			set_pm_interrupt(vec, vecs[i].vt_old);
 {$else}
-			SetIntVec(vec, vec_old[i]);
+			SetIntVec(vec, vecs[i].vt_old);
 {$endif}
-			for k := i to vec_n - 2 do
-			begin
-				vec_no[k] := vec_no[k + 1];
-				vec_old[k] := vec_old[k + 1];
-			end;
+			for k := i to vec_n - 2 do vecs[k] := vecs[k + 1];
 			dec(vec_n);
 			exit;
 		end;

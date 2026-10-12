@@ -188,11 +188,15 @@ type
 	end;
 	NT_KEYS		= array[0 .. NT_LINES - 1] of LINE_KEY;
 	NT_COLOUR_KEYS	= array[0 .. NT_LINES - 1] of longint;
+	{ a nametable's kept lines: their pixels and their colours }
+	NT_STORE	= record
+		nc_pix	: PPPU_PICTURE;
+		nc_col	: PPPU_PICTURE;
+	end;
 
 { in blocks of 240 lines: no compiler's block holds them all in 16 bits }
 var
-	nt_pix		: array[0 .. 3] of PPPU_PICTURE;
-	nt_col		: array[0 .. 3] of PPPU_PICTURE;
+	nt_cache	: array[0 .. 3] of NT_STORE;
 	nt_key		: ^NT_KEYS;
 	nt_colours	: ^NT_COLOUR_KEYS;	{ on the heap: BP7's data segment is short }
 	row_gen		: array[0 .. 3, 0 .. 29] of longint;	{ by nametable row: its writes }
@@ -504,12 +508,12 @@ end;
 { kept line e's pixels and colours }
 function	pix_line(e: U16): PBYTE;
 begin
-	pix_line := @nt_pix[e div PPU_H]^[e mod PPU_H, 0];
+	pix_line := @nt_cache[e div PPU_H].nc_pix^[e mod PPU_H, 0];
 end;
 
 function	col_line(e: U16): PBYTE;
 begin
-	col_line := @nt_col[e div PPU_H]^[e mod PPU_H, 0];
+	col_line := @nt_cache[e div PPU_H].nc_col^[e mod PPU_H, 0];
 end;
 
 { the kept line of nametable p, row r, fine y fy (pattern table half),
@@ -1057,8 +1061,8 @@ begin
 	ppu_screen := malloc(sizeof(PPU_PICTURE));
 	for i := 0 to 3 do
 	begin
-		nt_pix[i] := malloc(sizeof(PPU_PICTURE));
-		nt_col[i] := malloc(sizeof(PPU_PICTURE));
+		nt_cache[i].nc_pix := malloc(sizeof(PPU_PICTURE));
+		nt_cache[i].nc_col := malloc(sizeof(PPU_PICTURE));
 	end;
 	nt_key := malloc(sizeof(NT_KEYS));
 	nt_colours := malloc(sizeof(NT_COLOUR_KEYS));

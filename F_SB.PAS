@@ -32,12 +32,19 @@ implementation
 uses
 	dos, f_sys, f_dos;
 
+type	DMA_PORTS	= record
+		dp_addr, dp_count, dp_page	: byte;
+	end;
+
 const
 	RING	= 8192;			{ samples, a power of 2 }
 	HALF	= 256;			{ samples a DMA half }
-	DMA_ADDR	: array[0 .. 3] of byte = ($00, $02, $04, $06);
-	DMA_COUNT	: array[0 .. 3] of byte = ($01, $03, $05, $07);
-	DMA_PAGE	: array[0 .. 3] of byte = ($87, $83, $81, $82);
+	{ each 8-bit DMA channel's ports: address, count, page }
+	DMA_CHANNELS	: array[0 .. 3] of DMA_PORTS = (
+		(dp_addr: $00; dp_count: $01; dp_page: $87),
+		(dp_addr: $02; dp_count: $03; dp_page: $83),
+		(dp_addr: $04; dp_count: $05; dp_page: $81),
+		(dp_addr: $06; dp_count: $07; dp_page: $82));
 
 var	base, irq, dma	: longint;
 	major, minor	: longint;
@@ -202,11 +209,11 @@ begin
 	outb($0A, dma or 4);
 	outb($0C, 0);
 	if loop then outb($0B, $58 or dma) else outb($0B, $48 or dma);
-	outb(DMA_ADDR[dma], phys and $FF);
-	outb(DMA_ADDR[dma], (phys shr 8) and $FF);
-	outb(DMA_COUNT[dma], (bytes - 1) and $FF);
-	outb(DMA_COUNT[dma], (bytes - 1) shr 8);
-	outb(DMA_PAGE[dma], phys shr 16);
+	outb(DMA_CHANNELS[dma].dp_addr, phys and $FF);
+	outb(DMA_CHANNELS[dma].dp_addr, (phys shr 8) and $FF);
+	outb(DMA_CHANNELS[dma].dp_count, (bytes - 1) and $FF);
+	outb(DMA_CHANNELS[dma].dp_count, (bytes - 1) shr 8);
+	outb(DMA_CHANNELS[dma].dp_page, phys shr 16);
 	outb($0A, dma);
 end;
 
@@ -215,8 +222,8 @@ function	dma_position: longint;
 var	lo, hi	: longint;
 begin
 	outb($0C, 0);
-	lo := inb(DMA_COUNT[dma]);
-	hi := inb(DMA_COUNT[dma]);
+	lo := inb(DMA_CHANNELS[dma].dp_count);
+	hi := inb(DMA_CHANNELS[dma].dp_count);
 	dma_position := 2 * HALF - (((hi shl 8) or lo) + 1);
 end;
 
