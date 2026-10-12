@@ -78,7 +78,6 @@ const
 	HIT_DELAY	= 2;	{ sprite 0 hit: dots after its pixel's line start }
 	LINE_DOTS	= 341;
 	VBL_LINE	= 241;
-	PRE_LINE	= 261;
 
 	{ what happens on a line, by dot }
 	A_RENDER	= 0;
@@ -1087,7 +1086,7 @@ end;
 procedure	ppu_power;
 begin
 	ppu_start;
-	line_vbl := 241;
+	line_vbl := VBL_LINE;
 	if ppu_region = TV_DENDY then line_vbl := 291;
 	if ppu_region = TV_NTSC then frame_lines := 262 else frame_lines := 312;
 	line_pre := frame_lines - 1;

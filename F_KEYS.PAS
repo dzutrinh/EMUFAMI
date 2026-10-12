@@ -16,9 +16,6 @@ interface
 
 const
 	KEY_ESC		= $01;
-	KEY_1		= $02;
-	KEY_TAB		= $0F;
-	KEY_Q		= $10;
 	KEY_W		= $11;
 	KEY_T		= $14;
 	KEY_Y		= $15;
@@ -33,7 +30,6 @@ const
 	KEY_Z		= $2C;
 	KEY_X		= $2D;
 	KEY_RSHIFT	= $36;
-	KEY_SPACE	= $39;
 	KEY_F1		= $3B;
 	KEY_F2		= $3C;
 	KEY_F3		= $3D;

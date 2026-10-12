@@ -342,23 +342,31 @@ begin
 	end;
 end;
 
-procedure	dmc_run(t: longint);
+{ nothing to play or fetch: the DMC's clocks to t skipped at once }
+procedure	dmc_skip(t: longint);
 var	n	: longint;
+begin
+	with dmc do
+	begin
+		at := t;
+		if next <= t then
+		begin
+			n := (t - next) div DMC_PERIOD[rate] + 1;
+			inc(next, n * DMC_PERIOD[rate]);
+			bits := bits - n mod 8;
+			if bits <= 0 then inc(bits, 8);
+		end;
+	end;
+end;
+
+procedure	dmc_run(t: longint);
 begin
 	with dmc do
 	begin
 		if silent and not full and (left = 0) then
 		begin
-			{ nothing to play or fetch: the clocks skipped at once }
 			inc(acc, level * (t - at));
-			at := t;
-			if next <= t then
-			begin
-				n := (t - next) div DMC_PERIOD[rate] + 1;
-				inc(next, n * DMC_PERIOD[rate]);
-				bits := bits - n mod 8;
-				if bits <= 0 then inc(bits, 8);
-			end;
+			dmc_skip(t);
 			exit;
 		end;
 		while next <= t do
@@ -647,7 +655,6 @@ end;
 
 { the DMC to t: idle, its clocks skipped at once; else its steps }
 procedure	dmc_mix(t: longint);
-var	n	: longint;
 begin
 	dk := 0;
 	with dmc do
@@ -659,14 +666,7 @@ begin
 		end;
 		if silent and not full and (left = 0) then
 		begin
-			at := t;
-			if next <= t then
-			begin
-				n := (t - next) div DMC_PERIOD[rate] + 1;
-				inc(next, n * DMC_PERIOD[rate]);
-				bits := bits - n mod 8;
-				if bits <= 0 then inc(bits, 8);
-			end;
+			dmc_skip(t);
 			exit;
 		end;
 		dmc_steps(t);

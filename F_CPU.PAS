@@ -40,7 +40,6 @@ procedure	cpu_power;			{ registers cleared, the reset vector; 7 cycles }
 procedure	cpu_reset;			{ the reset button }
 function	cpu_p: U16;			{ the flags, bit 5 set, B clear }
 procedure	cpu_set_p(p: U16);
-procedure	cpu_step;			{ one instruction, or one interrupt taken }
 procedure	cpu_run(until_cycle: longint);	{ steps until cycles reaches it }
 
 implementation
@@ -954,10 +953,6 @@ procedure	cpu_start;
 begin
 end;
 
-procedure	cpu_step;
-begin
-	cpu_run(cycles + 1);
-end;
 
 begin
 	run_until := 0;

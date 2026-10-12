@@ -443,6 +443,26 @@ begin
 	end;
 end;
 
+{ F3 (sound), F4 (frames a second), F6 (audio rate): the setting switched;
+  the line saying so ('' for F4 and any other key) }
+function	option_key(k: longint): string;
+begin
+	option_key := '';
+	if k = KEY_F3 then
+	begin
+		set_sound(not muted);
+		if muted then option_key := 'SOUND OFF' else option_key := 'SOUND ON';
+	end
+	else if k = KEY_F4 then show_fps := not show_fps
+	else if k = KEY_F6 then
+	begin
+		set_rate(not low_rate);
+		if not sound_on then option_key := 'NO SOUND'
+		else if low_rate then option_key := 'AUDIO 11 KHZ'
+		else	option_key := 'AUDIO 22 KHZ';
+	end;
+end;
+
 { the BIOS's clock at 0040:006C: 18.2 ticks a second since midnight }
 function	bios_ticks: longint;
 var	t	: longint;
@@ -525,19 +545,10 @@ begin
 		k := key_get;
 		if k = KEY_ESC then break;
 		if k = KEY_F1 then nes_reset;
-		if k = KEY_F3 then
+		s := option_key(k);
+		if s <> '' then
 		begin
-			set_sound(not muted);
-			if muted then note := 'SOUND OFF' else note := 'SOUND ON';
-			note_frames := 90;
-		end;
-		if k = KEY_F4 then show_fps := not show_fps;
-		if k = KEY_F6 then
-		begin
-			set_rate(not low_rate);
-			if not sound_on then note := 'NO SOUND'
-			else if low_rate then note := 'AUDIO 11 KHZ'
-			else	note := 'AUDIO 22 KHZ';
+			note := s;
 			note_frames := 90;
 		end;
 		if k = KEY_F5 then
@@ -702,9 +713,7 @@ begin
 		KEY_ESC:	break;
 		KEY_F1:		page := 1;
 		KEY_F2:		page := 2;
-		KEY_F3:		set_sound(not muted);
-		KEY_F4:		show_fps := not show_fps;
-		KEY_F6:		set_rate(not low_rate);
+		KEY_F3, KEY_F4, KEY_F6:	option_key(k);
 		KEY_UP:		if cur > 0 then dec(cur);
 		KEY_DOWN:	if cur < count - 1 then inc(cur);
 		KEY_PGUP:	begin
