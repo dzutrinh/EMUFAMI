@@ -2,7 +2,7 @@
 	EMUFAMI.PAS
 	-----------
 	EMUFAMI, an educational NES emulator for DOS, fully written in Pascal.
-	Version 1.1
+	Version 1.3
 	(c) 2026 Trinh D.D. Nguyen
 	Infinity Group
 
@@ -20,6 +20,7 @@ uses
 	f_sys,
 	f_dos,
 	f_vga,
+	f_text,
 	f_keys,
 	f_sb,
 	f_cart,
@@ -32,8 +33,9 @@ uses
 	f_nes;
 
 const
-	APP_VER		= '1.1';
+	APP_VER		= '1.3';
 	RATE		= 22050;	{ samples a second asked of the card }
+	HALF_RATE	= 11025;	{ or with F6: half the mixing }
 	MAX_ENTRIES	= 1024;
 	LIST_Y		= 36;		{ the list's first row, pixels }
 	LIST_ROWS	= 21;
@@ -47,14 +49,16 @@ const
 	C_TITLE		= 68;
 	C_BAND		= 69;
 	C_WARN		= 70;
-	UI_RGB	 	: array[C_BG .. C_WARN, 0 .. 2] of byte = (
+	C_DIR		= 71;		{ folders in the list }
+	UI_RGB	 	: array[C_BG .. C_DIR, 0 .. 2] of byte = (
 		( 16,  16,  28),
 		(232, 232, 232),
 		(120, 120, 136),
 		( 40,  72, 160),
 		(230,  40,  40),
 		( 32,  32,  52),
-		(255, 200,  64));
+		(255, 200,  64),
+		(112, 208, 240));
 
 type
 	ENTRY	= record
@@ -74,6 +78,8 @@ var
 	sound_on	: boolean;		{ a card playing }
 	muted		: boolean;		{ F3: the sound off (the card kept) }
 	show_fps	: boolean;		{ F4: frames a second shown }
+	text_mode	: boolean;		{ F5 or /TEXT: the game in VGA text mode }
+	low_rate	: boolean;		{ F6: the card at 11,025 samples a second }
 	base_cycles	: longint;		{ the APU's sample length as made }
 	scr			: PSCREEN;		{ the list's and the overlays' buffer }
 
@@ -82,7 +88,7 @@ var
 procedure	ui_colours;
 var	i	: longint;
 begin
-	for i := C_BG to C_WARN do
+	for i := C_BG to C_DIR do
 		vga_colour(i, UI_RGB[i, 0], UI_RGB[i, 1], UI_RGB[i, 2]);
 end;
 
@@ -223,6 +229,7 @@ begin
 		c := C_TEXT;
 		if entries^[k].dir then
 		begin
+			c := C_DIR;
 			s := '\' + entries^[k].name;
 			if entries^[k].name = '..' then s := '.. (UP)';
 			sz := 'DIR';
@@ -251,6 +258,7 @@ begin
 	vga_text(scr, 4, 213, 'ENTER PLAY  F1 HELP  F2 ABOUT', C_TEXT);
 	if message <> '' then vga_text(scr, 4, 226, fit(message, 31), C_WARN)
 	else if sound_on and muted then vga_text(scr, 4, 226, 'SOUND: OFF', C_DIM)
+	else if sound_on and low_rate then vga_text(scr, 4, 226, 'SOUND: ' + sb_why + ' 11K', C_DIM)
 	else if sound_on then vga_text(scr, 4, 226, 'SOUND: ' + sb_why, C_DIM)
 	else	vga_text(scr, 4, 226, 'NO SOUND: ' + fit(sb_why, 21), C_DIM);
 	vga_retrace;
@@ -261,13 +269,13 @@ procedure	draw_help;
 const	LINES	: array[0 .. 23] of string[31] = (
 		'ROM PICKER',
 		' ARROWS         NAVIGATE',
-		' HOME END       FIRST, LAST',
-		' A TO Z         QUICK JUMP',
+		' A-Z            QUICK JUMP',
 		' ENTER          PLAY/OPEN',
 		' BACKSPACE      FOLDER UP',
 		' F2             ABOUT',
 		' F3             SOUND ON/OFF',
 		' F4             FPS ON/OFF',
+		' F6             AUDIO 11/22 KHZ',
 		' ESC            QUIT',
 		'',
 		'IN-GAME         PAD 1    PAD 2',
@@ -276,9 +284,9 @@ const	LINES	: array[0 .. 23] of string[31] = (
 		' B              Z        G',
 		' SELECT         RSHIFT   T',
 		' START          ENTER    Y',
-		'',
 		' P              PAUSE',
 		' F1             RESET',
+		' F5             VGA/TEXT MODE',
 		' ESC            CLOSE',
 		'',
 		'SAVES',
@@ -299,12 +307,13 @@ begin
 end;
 
 procedure	draw_about;
-const	LINES	: array[0 .. 8] of string[31] = (
+const	LINES	: array[0 .. 9] of string[31] = (
 		'A NES EMULATOR FOR DOS',
 		'',
 		'FOR EDUCATIONAL PURPOSE ONLY',
 		'WRITTEN IN PURE PASCAL',
 		'',
+		'----',
 		'',
 		'(C) 2026 TRINH D.D. NGUYEN',
 		'INFINITY GROUP',
@@ -366,7 +375,7 @@ procedure	frame_sound;
 var	q, target, c	: longint;
 begin
 	if not sound_on or muted then exit;
-	sb_put(@apu_samples, apu_count);
+	sb_put(apu_samples, apu_count);
 	apu_count := 0;
 	target := 3 * sb_rate div 60;
 	q := sb_queued;
@@ -377,17 +386,47 @@ begin
 end;
 
 { the picture with a line of text over it, until a key }
+const	T_BAND	= $0F;		{ text mode's band and text: NES black, white }
+	T_TEXT	= $30;
+	PAUSE_TEXT	= 'PAUSED - P TO RESUME';
+	TEXT_NOTE	= 'TEXT MODE 640X480';
+
 procedure	overlay(const s: string);
+var	band, ink	: longint;
 begin
+	if text_mode then
+	begin
+		band := T_BAND;
+		ink := T_TEXT;
+	end
+	else
+	begin
+		pal_show(ppu_emphasis);
+		band := C_BAND;
+		ink := C_TEXT;
+	end;
 	move(ppu_screen^, scr^, sizeof(SCREEN));
-	vga_bar(scr, 0, 112, VGA_W, 16, C_BAND);
-	vga_text(scr, (VGA_W - 8 * length(s)) div 2, 116, s, C_TEXT);
+	vga_bar(scr, 0, 112, VGA_W, 16, band);
+	vga_text(scr, (VGA_W - 8 * length(s)) div 2, 116, s, ink);
 	vga_retrace;
-	vga_flip(scr);
+	if text_mode then txt_flip(scr, ppu_emphasis) else vga_flip(scr);
 end;
 
 { the sound on or off (F3): off, the APU makes no samples (and runs the
   faster for it), the card plays silence }
+{ the card's rate (F6): 22,050 samples a second, or 11,025 (half the
+  mixing, duller highs); the card started again at it }
+procedure	set_sound(off: boolean); forward;
+
+procedure	set_rate(low: boolean);
+begin
+	low_rate := low;
+	if not sound_on then exit;
+	sb_stop;
+	if low then sound_on := sb_start(HALF_RATE) else sound_on := sb_start(RATE);
+	set_sound(muted);
+end;
+
 procedure	set_sound(off: boolean);
 begin
 	muted := off;
@@ -414,10 +453,34 @@ end;
 
 { a line of text in a band over the picture (the PPU draws it all again
   next frame) }
-procedure	over_game(x: longint; const s: string);
+procedure	over_game(right: boolean; const s: string);
+var	x, band, ink	: longint;
 begin
-	vga_bar(PSCREEN(ppu_screen), x - 4, 5, 8 * length(s) + 8, 14, C_BAND);
-	vga_text(PSCREEN(ppu_screen), x, 8, s, C_TEXT);
+	x := 8;
+	if right then x := VGA_W - 8 - 8 * length(s);
+	band := C_BAND;
+	ink := C_TEXT;
+	if text_mode then
+	begin
+		band := T_BAND;
+		ink := T_TEXT;
+	end;
+	vga_bar(PSCREEN(ppu_screen), x - 4, 5, 8 * length(s) + 8, 14, band);
+	vga_text(PSCREEN(ppu_screen), x, 8, s, ink);
+end;
+
+{ the game in text mode (TRUE: when there is memory for it) or back in
+  VGA's 256x240 }
+procedure	set_text(on: boolean);
+begin
+	if on then text_mode := txt_start
+	else
+	begin
+		vga_start;
+		ui_colours;
+		pal_forget;
+		text_mode := FALSE;
+	end;
 end;
 
 procedure	play(const name: string);
@@ -427,7 +490,10 @@ var	k, acc, frame	: longint;
 	note_frames	: longint;
 	{ frames a second: the frames counted since fps_from (BIOS ticks),
 	  the last count, -1 none yet }
-	fps_from, fps_frames, fps, t	: longint;
+	fps_from, fps_frames, fps, t, n	: longint;
+	{ pacing: the BIOS tick the next frame is due on, and the fraction
+	  (in 65536ths) }
+	due_tick, due_frac, now	: longint;
 	s		: string;
 begin
 	message := '';
@@ -438,14 +504,22 @@ begin
 	end;
 	keys_flush;
 	pal_forget;
+	if text_mode then set_text(TRUE);
 	set_sound(muted);
 	acc := 0;
 	frame := 0;
 	paused := FALSE;
 	note_frames := 0;
+	if text_mode then
+	begin
+		note := TEXT_NOTE;
+		note_frames := 90;
+	end;
 	fps := -1;
 	fps_frames := 0;
 	fps_from := bios_ticks;
+	due_tick := bios_ticks;
+	due_frac := 0;
 	repeat
 		sb_watch;
 		k := key_get;
@@ -458,19 +532,35 @@ begin
 			note_frames := 90;
 		end;
 		if k = KEY_F4 then show_fps := not show_fps;
+		if k = KEY_F6 then
+		begin
+			set_rate(not low_rate);
+			if not sound_on then note := 'NO SOUND'
+			else if low_rate then note := 'AUDIO 11 KHZ'
+			else	note := 'AUDIO 22 KHZ';
+			note_frames := 90;
+		end;
+		if k = KEY_F5 then
+		begin
+			set_text(not text_mode);
+			if text_mode then note := TEXT_NOTE else note := 'VGA 256X240';
+			note_frames := 90;
+			if paused then overlay(PAUSE_TEXT);
+		end;
 		if k = KEY_P then
 		begin
 			paused := not paused;
 			if paused then
 			begin
 				sb_silence;
-				overlay('PAUSED - P TO RESUME');
+				overlay(PAUSE_TEXT);
 			end;
 		end;
 		if paused then
 		begin
 			fps_frames := 0;		{ the count starts again after }
 			fps_from := bios_ticks;
+			due_tick := bios_ticks;
 			vga_retrace;
 			continue;
 		end;
@@ -484,14 +574,29 @@ begin
 		nes_frame;
 		inc(frame);
 		frame_sound;
-		{ a refresh a frame (PAL, Dendy: 6 in 5) }
-		if nes_region = TV_NTSC then inc(acc, 5) else inc(acc, 6);
-		while acc >= 5 do
+		{ the frame's time on the BIOS clock (1193182 / n 65536ths of
+		  a tick); on time or ahead, refreshes waited for: the screen's
+		  rate (60 a second, VGA and text) over the game's (NTSC 60, PAL
+		  and Dendy 50); more than a tick behind, shown at once (a
+		  slow machine not held to whole refreshes); half a second
+		  behind, or past midnight, the clock taken as it is }
+		if nes_region = TV_NTSC then n := 60 else n := 50;
+		inc(due_frac, 1193182 div n);
+		inc(due_tick, due_frac shr 16);
+		due_frac := due_frac and $FFFF;
+		now := bios_ticks;
+		if (now < due_tick - 1000) or (now > due_tick + 9) then due_tick := now;
+		if now <= due_tick + 1 then
 		begin
-			vga_retrace;
-			dec(acc, 5);
-		end;
-		pal_show(ppu_emphasis);
+			inc(acc, 60);
+			while acc >= n do
+			begin
+				vga_retrace;
+				dec(acc, n);
+			end;
+		end
+		else	acc := 0;
+		if not text_mode then pal_show(ppu_emphasis);
 		{ the frames of a second or so (18 ticks and more), rounded; the
 		  clock gone back at midnight: counted again }
 		inc(fps_frames);
@@ -509,17 +614,22 @@ begin
 		end;
 		if note_frames > 0 then
 		begin
-			over_game(8, note);
+			over_game(FALSE, note);
 			dec(note_frames);
 		end;
 		if show_fps and (fps >= 0) then
 		begin
 			s := itoa(fps) + ' FPS';
-			over_game(VGA_W - 8 - 8 * length(s), s);
+			over_game(TRUE, s);
 		end;
-		vga_flip(ppu_screen);
+		if text_mode then txt_flip(ppu_screen, ppu_emphasis) else vga_flip(ppu_screen);
 	until FALSE;
 	nes_close;
+	if text_mode then
+	begin
+		vga_start;
+		ui_colours;
+	end;
 	apu_count := 0;
 	sb_silence;
 	keys_flush;
@@ -594,6 +704,7 @@ begin
 		KEY_F2:		page := 2;
 		KEY_F3:		set_sound(not muted);
 		KEY_F4:		show_fps := not show_fps;
+		KEY_F6:		set_rate(not low_rate);
 		KEY_UP:		if cur > 0 then dec(cur);
 		KEY_DOWN:	if cur < count - 1 then inc(cur);
 		KEY_PGUP:	begin
@@ -639,10 +750,12 @@ begin
 	end;
 	GetDir(0, path);
 	game := '';
+	text_mode := FALSE;
 	for i := 1 to paramcount do
 	begin
 		arg := uppercase(paramstr(i));
-		if (length(arg) > 4) and (copy(arg, length(arg) - 3, 4) = '.NES') then
+		if arg = '/TEXT' then text_mode := TRUE
+		else if (length(arg) > 4) and (copy(arg, length(arg) - 3, 4) = '.NES') then
 		begin
 			game := arg;
 			path := arg;
@@ -659,19 +772,27 @@ begin
 	apu_start;
 	sound_on := sb_start(RATE);
 	muted := FALSE;
+	low_rate := FALSE;
 	show_fps := FALSE;
 	keys_start;
 	vga_start;
 	ui_colours;
 	message := '';
 	scan_folder;
+	{ a game named on the command line: Esc ends EMUFAMI too (for
+	  scripts), a game that cannot open is reported, exit code 1 }
 	if game <> '' then
 	begin
 		if pos('\', game) = 0 then game := path + game;
 		play(game);
-	end;
-	picker;
+	end
+	else	picker;
 	vga_end;
 	keys_end;
 	sb_stop;
+	if (game <> '') and (message <> '') then
+	begin
+		writeln('EMUFAMI: ', message);
+		halt(1);
+	end;
 end.

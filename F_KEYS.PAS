@@ -38,6 +38,8 @@ const
 	KEY_F2		= $3C;
 	KEY_F3		= $3D;
 	KEY_F4		= $3E;
+	KEY_F5		= $3F;
+	KEY_F6		= $40;
 	KEY_HOME	= $47;
 	KEY_UP		= $48;
 	KEY_PGUP	= $49;

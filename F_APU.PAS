@@ -24,8 +24,9 @@ const
 
 type
 	APU_READ_PROC	= function(addr: longint): longint;
+	APU_SAMPLE_BUF	= array[0 .. APU_MAX_SAMPLES - 1] of smallint;
 
-var	apu_samples	: array[0 .. APU_MAX_SAMPLES - 1] of smallint;
+var	apu_samples	: ^APU_SAMPLE_BUF;	{ on the heap (by apu_start): BP7's data segment is short }
 	apu_count	: longint;		{ samples waiting in apu_samples }
 	apu_stall	: longint;		{ CPU cycles the DMC's fetches took, for the CPU to add }
 	apu_dmc_read: APU_READ_PROC;{ how the DMC reads CPU memory }
@@ -730,7 +731,7 @@ begin
 		if y < -32768 then y := -32768;
 		if apu_count < APU_MAX_SAMPLES then
 		begin
-			apu_samples[apu_count] := y;
+			apu_samples^[apu_count] := y;
 			inc(apu_count);
 		end;
 	end;
@@ -1137,6 +1138,8 @@ begin
 	audio := rate > 0;
 	if not audio then exit;
 	apu_start;
+	audio := apu_samples <> nil;
+	if not audio then exit;
 	smp_cycles := round(CPU_HZ / rate * 65536);
 	resync(dmc.at);
 end;
@@ -1174,6 +1177,7 @@ var	tables_made	: boolean;
 procedure	apu_start;
 begin
 	if tables_made then exit;
+	apu_samples := malloc(sizeof(APU_SAMPLE_BUF));
 	make_tables;
 	tables_made := TRUE;
 end;
@@ -1190,6 +1194,7 @@ begin
 	apu_pal := FALSE;
 	apu_dendy := FALSE;
 	audio := FALSE;
+	apu_samples := nil;
 	smp_cycles := 0;
 	tables_made := FALSE;
 	apu_power;

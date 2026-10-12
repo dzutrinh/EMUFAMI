@@ -43,7 +43,7 @@ var	base, irq, dma	: longint;
 	major, minor	: longint;
 	tc				: longint;	{ the DSP's time constant for the rate }
 	auto			: boolean;
-	ring_buf		: array[0 .. RING - 1] of byte;
+	ring_buf		: PBYTES;	{ RING bytes on the heap: BP7's data segment is short }
 	{ the card reads at head, sb_put writes at tail (U16: one write
 	  under BP7 too, as the interrupt may come between two) }
 	ring_head,
@@ -173,7 +173,7 @@ begin
 	begin
 		{ full: the rest dropped }
 		if ((t + 1) and (RING - 1)) = ring_head then break;
-		ring_buf[t] := ((U16(PSAMPLES(p)^[i]) shr 8) + 128) and $FF;
+		ring_buf^[t] := ((U16(PSAMPLES(p)^[i]) shr 8) + 128) and $FF;
 		t := (t + 1) and (RING - 1);
 	end;
 	ring_tail := t;
@@ -188,7 +188,7 @@ begin
 	begin
 		if k <> ring_tail then
 		begin
-			last := ring_buf[k];
+			last := ring_buf^[k];
 			k := (k + 1) and (RING - 1);
 		end;
 		half_buf[i] := last;
@@ -429,7 +429,8 @@ begin
 	if rate < 8000 then rate := 8000;
 	tc := 256 - 1000000 div rate;
 	sb_rate := 1000000 div (256 - tc);
-	if not dos_buffer(2 * HALF) then
+	if ring_buf = nil then ring_buf := malloc(RING);
+	if (ring_buf = nil) or not dos_buffer(2 * HALF) then
 	begin
 		why := 'NO DOS MEMORY FOR SOUND';
 		exit;
@@ -449,6 +450,7 @@ begin
 	ready := FALSE;
 	{ the line shut while the vector changes, as every driver does }
 	mask(TRUE);
+	lock_mem(ring_buf^, RING);
 	lock_mem(ring_buf, sizeof(ring_buf));
 	lock_mem(half_buf, sizeof(half_buf));
 	lock_mem(ring_head, sizeof(ring_head));
@@ -471,6 +473,7 @@ begin
 end;
 
 begin
+	ring_buf := nil;
 	on := FALSE;
 	hooked := FALSE;
 	ready := FALSE;

@@ -1,10 +1,10 @@
-# EMUFAMI v1.1
+# EMUFAMI v1.3
 
 An educational NES emulator for DOS.
 
-The whole emulator is written using plain, readable Pascal syntax: the 6502, the PPU, the APU and the mappers. Compatible with **TMT Pascal 3.90**, **Free Pascal 3.2** (go32v2) or **Borland Pascal 7.0** (16-bit protected mode). 
+The whole emulator is written using plain, readable Pascal syntax: the 6502, the PPU, the APU and the mappers. Compatible with **TMT Pascal 3.90**, **Free Pascal 3.2** (go32v2) or **Borland Pascal 7.0** (16-bit protected mode). EMUFAMI requires a VGA adapter to run and it runs under VGA 256x240 or TEXT 640x480 video modes.
 
-This is a part of a fully functional Pascal-based NES emulator running under DOS. The emulator is written completely from scratch, no external dependencies needed.
+This is a part of a fully functional Pascal-based NES emulator running under DOS that is under development. The emulator is written completely from scratch, no external dependencies needed.
 
 **NOTE:** 
 * The owners of **TMT Pascal** have removed the download of TMT Pascal 3.9 for DOS from their website. Alternate link: https://www.bttr-software.de/links/.
@@ -30,11 +30,22 @@ This is a part of a fully functional Pascal-based NES emulator running under DOS
 |---|---|---|
 | ![Adventure Island](SCREENS/ISLAND1.PNG) |  ![nestest](SCREENS/NESTEST.PNG) | ![NEStress](SCREENS/NESTRESS.PNG) |
 
+### Text mode
+
+| Dig Dug | Mega Man |
+|---|---|
+| ![Dig Dug](SCREENS/TDIGDUG.PNG) | ![Mega Man](SCREENS/TMEGAMN.PNG) |
+
+| The Legend of Kage | Ninja Gaiden |
+|---|---|
+| ![The Legend of Kage](SCREENS/TKAGE.PNG) | ![Ninja Gaiden](SCREENS/TGAIDEN.PNG) |
+
 ## Running
 
 ```
 FAMI_T            Open ROM picker
-FAMI_T ROM.NES    launch ROM.NES
+FAMI_T ROM.NES    launch ROM.NES, Esc quits to DOS
+FAMI_T /TEXT      games in VGA text mode
 ```
 
 `FAMI_F` and `FAMI_B` (the FPC and BP7 builds) take the same arguments.
@@ -51,6 +62,7 @@ FAMI_T ROM.NES    launch ROM.NES
 | F2 | about |
 | F3 | sound on/off |
 | F4 | frames per second on/off |
+| F6 | audio at 22 or 11 kHz |
 | Esc | quit |
 
 | In-game | Pad 1 | Pad 2 |
@@ -61,7 +73,7 @@ FAMI_T ROM.NES    launch ROM.NES
 | Select | Right Shift | T |
 | Start | Enter | Y |
 
-**P** pauses, **F1** resets, **Esc** closes active ROM.
+**P** pauses, **F1** resets, **F5** switches between VGA and text mode, **Esc** closes active ROM.
 
 A game's battery RAM is kept in `NAME.SAV` beside `NAME.NES`. There are no save states.
 
@@ -69,7 +81,7 @@ A game's battery RAM is kept in `NAME.SAV` beside `NAME.NES`. There are no save 
 
 - **CPU:** I'm not sure about this. Tested under DOSBox-Staging and DOSBox-X only.
   At DOSBox-Staging's default speed for protected mode (60000 cycles), Super Mario Bros. runs at about 48 frames per second (TMT build), 56 (FPC) and 33 (BP7); with `cycles = max` all three reach the full 60.
-- **Video:** VGA only, tweaked mode 256x240 @ 60 Hz.
+- **Video:** VGA only, tweaked mode 256x240 @ 60 Hz, or text mode at 640x480 @ 60 Hz.
 - **Sound:** Sound Blaster (1.x, 2.0, Pro, 16, AWE).
 - **Memory:** 4 MB.
 
@@ -92,12 +104,12 @@ MAKE tmt           BIN\FAMI_T.EXE (TMT Pascal)
 MAKE fpc           BIN\FAMI_F.EXE (Free Pascal - go32v2)
 MAKE bp            BIN\FAMI_B.EXE (Borland Pascal 7.0 - protected mode)
 MAKE clean         clean all binaries and intermediate files for a fresh build.
-BUILD              MAKE clean, then MAKE: all three from scratch
+BUILD              all three from scratch
 ```
 
 To specify your Pascal compiler use the following example: `MAKE -DBPC=D:\BP\BIN\BPC.EXE bp` (also `TMTPC`, `FPC`). The BP7 build needs `RTM.EXE` and `DPMI16BI.OVL` (from BP7's `BIN` folder) beside it or on the `PATH`.
 
-The emulator has small footprints. TMT-compiled binary is about 84KB, the FPC one is roughly 93KB and the BP7 one about 91KB.
+The emulator has small footprints. TMT-compiled binary is about 91KB (92,922 bytes), the FPC one is roughly 98KB (99,840 bytes) and the BP7 one about 98KB (100,608 bytes).
 
 ## ROMs
 

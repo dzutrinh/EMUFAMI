@@ -1,12 +1,12 @@
 # EMUFAMI's makefile, for Borland MAKE (C:\BP\BIN\MAKE.EXE):
-#   MAKE              all three into BIN\
-#   MAKE bp           BIN\FAMI_B.EXE by Borland Pascal 7, 16-bit protected
+#   MAKE              all three
+#   MAKE bp           FAMI_B.EXE by Borland Pascal 7, 16-bit protected
 #                     mode: RTM.EXE and DPMI16BI.OVL beside it or on the PATH
-#   MAKE tmt          BIN\FAMI_T.EXE by TMT Pascal, DOS/4GW: DOS4GW.EXE
-#   MAKE fpc          BIN\FAMI_F.EXE by Free Pascal, go32v2: CWSDPMI.EXE
-#   MAKE clean        the programs, BIN\ and OBJ\ removed
+#   MAKE tmt          FAMI_T.EXE by TMT Pascal, DOS/4GW: DOS4GW.EXE
+#   MAKE fpc          FAMI_F.EXE by Free Pascal, go32v2: CWSDPMI.EXE
+#   MAKE clean        the programs, OBJ\ removed
 # Each compiler works in its own folder under OBJ\, emptied and removed
-# once its program is in BIN\ (every build compiles all units again).
+# once its program is in .\ (every build compiles all units again).
 # The compilers' paths can be given: MAKE -DBPC=D:\BP\BIN\BPC.EXE bp
 
 !if !$d(BPC)
@@ -25,38 +25,35 @@ SRC = EMUFAMI.PAS F_APU.PAS F_BUS.PAS F_CART.PAS F_CPU.PAS F_DOS.PAS \
 
 all: bp tmt fpc
 
-bp: BIN\FAMI_B.EXE
-tmt: BIN\FAMI_T.EXE
-fpc: BIN\FAMI_F.EXE
+bp: FAMI_B.EXE
+tmt: FAMI_T.EXE
+fpc: FAMI_F.EXE
 
-BIN\FAMI_B.EXE: $(SRC)
-	if not exist BIN\NUL md BIN
+FAMI_B.EXE: $(SRC)
 	if not exist OBJ\NUL md OBJ
 	if not exist OBJ\B\NUL md OBJ\B
 	$(BPC) -CP -B -Q -$G+ -EOBJ\B EMUFAMI.PAS
-	copy OBJ\B\EMUFAMI.EXE BIN\FAMI_B.EXE
+	copy OBJ\B\EMUFAMI.EXE FAMI_B.EXE
 	del OBJ\B\*.TPP
 	del OBJ\B\EMUFAMI.EXE
 	rd OBJ\B
 	-rd OBJ
 
-BIN\FAMI_T.EXE: $(SRC)
-	if not exist BIN\NUL md BIN
+FAMI_T.EXE: $(SRC)
 	if not exist OBJ\NUL md OBJ
 	if not exist OBJ\T\NUL md OBJ\T
 	$(TMTPC) -B -$LOGO- -STACK:262144 -STUB:WSTUB.EXE -UNIT:.;C:\TMT\UNITS -OUT:OBJ\T\ EMUFAMI.PAS
-	copy OBJ\T\EMUFAMI.EXE BIN\FAMI_T.EXE
+	copy OBJ\T\EMUFAMI.EXE FAMI_T.EXE
 	del OBJ\T\*.FPD
 	del OBJ\T\*.SYM
 	del OBJ\T\EMUFAMI.EXE
 	rd OBJ\T
 	-rd OBJ
 
-BIN\FAMI_F.EXE: $(SRC)
-	if not exist BIN\NUL md BIN
+FAMI_F.EXE: $(SRC)
 	if not exist OBJ\NUL md OBJ
 	if not exist OBJ\F\NUL md OBJ\F
-	$(FPC) -B -O2 -FUOBJ\F -FEBIN -oFAMI_F.EXE EMUFAMI.PAS
+	$(FPC) -B -O2 -FUOBJ\F -FE. -oFAMI_F.EXE EMUFAMI.PAS
 	del OBJ\F\*.O
 	del OBJ\F\*.PPU
 	rd OBJ\F
@@ -64,9 +61,9 @@ BIN\FAMI_F.EXE: $(SRC)
 
 # what a build stopped halfway may have left too
 clean:
-	if exist BIN\FAMI_B.EXE del BIN\FAMI_B.EXE
-	if exist BIN\FAMI_T.EXE del BIN\FAMI_T.EXE
-	if exist BIN\FAMI_F.EXE del BIN\FAMI_F.EXE
+	if exist FAMI_B.EXE del FAMI_B.EXE
+	if exist FAMI_T.EXE del FAMI_T.EXE
+	if exist FAMI_F.EXE del FAMI_F.EXE
 	if exist OBJ\B\*.TPP del OBJ\B\*.TPP
 	if exist OBJ\B\EMUFAMI.EXE del OBJ\B\EMUFAMI.EXE
 	if exist OBJ\T\*.FPD del OBJ\T\*.FPD
@@ -78,4 +75,4 @@ clean:
 	-if exist OBJ\T\NUL rd OBJ\T
 	-if exist OBJ\F\NUL rd OBJ\F
 	-if exist OBJ\NUL rd OBJ
-	-if exist BIN\NUL rd BIN
+	-if exist NUL rd BIN

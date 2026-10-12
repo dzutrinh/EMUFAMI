@@ -188,13 +188,14 @@ type
 		slot, slot_gen	: array[0 .. 3] of longint;
 	end;
 	NT_KEYS		= array[0 .. NT_LINES - 1] of LINE_KEY;
+	NT_COLOUR_KEYS	= array[0 .. NT_LINES - 1] of longint;
 
 { in blocks of 240 lines: no compiler's block holds them all in 16 bits }
 var
 	nt_pix		: array[0 .. 3] of PPPU_PICTURE;
 	nt_col		: array[0 .. 3] of PPPU_PICTURE;
 	nt_key		: ^NT_KEYS;
-	nt_colours	: array[0 .. NT_LINES - 1] of longint;
+	nt_colours	: ^NT_COLOUR_KEYS;	{ on the heap: BP7's data segment is short }
 	row_gen		: array[0 .. 3, 0 .. 29] of longint;	{ by nametable row: its writes }
 	bg_slot		: array[0 .. 7] of PBYTE;	{ the background's CHR slots for the line }
 	bg_page		: array[0 .. 7] of longint;	{ and their pages }
@@ -291,7 +292,10 @@ begin
 	end
 	else
 	begin
+		{ a colour written again as it was (games rewrite the whole
+		  palette every frame): the kept lines' colours still good }
 		i := pal_index(addr);
+		if pal[i] = v and $3F then exit;
 		pal[i] := v and $3F;
 		colours_grey := -1;
 		if i < 16 then inc(pal_gen);
@@ -540,12 +544,12 @@ begin
 		key^.gen := cache_gen;
 		key^.half := hf;
 		key^.row := row_gen[p, r];
-		nt_colours[e] := -1;
+		nt_colours^[e] := -1;
 	end;
-	if nt_colours[e] <> pal_gen shl 8 + colours_grey then
+	if nt_colours^[e] <> pal_gen shl 8 + colours_grey then
 	begin
 		nt_colour(pix_line(e), col_line(e));
-		nt_colours[e] := pal_gen shl 8 + colours_grey;
+		nt_colours^[e] := pal_gen shl 8 + colours_grey;
 	end;
 	nt_line := e;
 end;
@@ -1058,6 +1062,7 @@ begin
 		nt_col[i] := malloc(sizeof(PPU_PICTURE));
 	end;
 	nt_key := malloc(sizeof(NT_KEYS));
+	nt_colours := malloc(sizeof(NT_COLOUR_KEYS));
 	for b := 0 to 255 do
 	begin
 		FLIP[b] := 0;

@@ -84,6 +84,24 @@ begin
 	else	bus_write(addr, v);
 end;
 
+{ the zero page and the stack: always the console's RAM, so no page
+  map or bus to ask (rd and wr do the same there) }
+function	rd_ram(addr: U16): U16;
+var	v	: U16;
+begin
+	inc(cycles);
+	v := ram[addr];
+	bus_open := v;
+	rd_ram := v;
+end;
+
+procedure	wr_ram(addr, v: U16);
+begin
+	inc(cycles);
+	ram[addr] := v;
+	bus_open := v;
+end;
+
 { the byte at PC, PC on (rd's work done here: the call saved) }
 function	fetch: U16;
 var	p	: PBYTE;
@@ -186,7 +204,7 @@ function	ea_zpi(index: U16): U16;
 var	b	: U16;
 begin
 	b := fetch;
-	rd(b);
+	rd_ram(b);
 	ea_zpi := (b + index) and $FF;
 end;
 
@@ -217,10 +235,10 @@ function	ea_izx: U16;
 var	b, lo	: U16;
 begin
 	b := fetch;
-	rd(b);
+	rd_ram(b);
 	b := (b + cpu.x) and $FF;
-	lo := rd(b);
-	ea_izx := lo or rd((b + 1) and $FF) shl 8;
+	lo := rd_ram(b);
+	ea_izx := lo or rd_ram((b + 1) and $FF) shl 8;
 end;
 
 { (zp),Y }
@@ -228,8 +246,8 @@ function	ea_izy(wrt: boolean): U16;
 var	b, lo	: U16;
 begin
 	b := fetch;
-	lo := rd(b);
-	lo := lo or rd((b + 1) and $FF) shl 8;
+	lo := rd_ram(b);
+	lo := lo or rd_ram((b + 1) and $FF) shl 8;
 	ea_izy := cross(lo, cpu.y, wrt);
 end;
 
@@ -316,11 +334,9 @@ const
 	K_DEC	= 4;
 	K_INC	= 5;
 
-function	rmw(addr, kind: U16): U16;
-var	v	: U16;
+{ the step a read-modify-write makes }
+function	modify(v, kind: U16): U16;
 begin
-	v := rd(addr);
-	wr(addr, v);
 	case kind of
 	K_ASL:	v := f_asl(v);
 	K_ROL:	v := f_rol(v);
@@ -335,8 +351,28 @@ begin
 			set_nz(v);
 		end;
 	end;
+	modify := v;
+end;
+
+function	rmw(addr, kind: U16): U16;
+var	v	: U16;
+begin
+	v := rd(addr);
+	wr(addr, v);
+	v := modify(v, kind);
 	wr(addr, v);
 	rmw := v;
+end;
+
+{ the same in the zero page }
+function	rmw_ram(addr, kind: U16): U16;
+var	v	: U16;
+begin
+	v := rd_ram(addr);
+	wr_ram(addr, v);
+	v := modify(v, kind);
+	wr_ram(addr, v);
+	rmw_ram := v;
 end;
 
 { a branch: the offset read; taken, a read at PC, and one more when the
@@ -385,35 +421,35 @@ type	OP_PROC	= procedure;
 
 { loads, stores, transfers }
 procedure	lda_imm;	begin lda(fetch); end;	{ $A9: LDA IMM }
-procedure	lda_zp;		begin lda(rd(ea_zp)); end;	{ $A5: LDA ZP }
-procedure	lda_zpx;	begin lda(rd(ea_zpi(cpu.x))); end;	{ $B5: LDA ZPX }
+procedure	lda_zp;		begin lda(rd_ram(ea_zp)); end;	{ $A5: LDA ZP }
+procedure	lda_zpx;	begin lda(rd_ram(ea_zpi(cpu.x))); end;	{ $B5: LDA ZPX }
 procedure	lda_abs;	begin lda(rd(ea_abs)); end;	{ $AD: LDA ABS }
 procedure	lda_abx;	begin lda(rd(ea_absi(cpu.x, FALSE))); end;	{ $BD: LDA ABX }
 procedure	lda_aby;	begin lda(rd(ea_absi(cpu.y, FALSE))); end;	{ $B9: LDA ABY }
 procedure	lda_izx;	begin lda(rd(ea_izx)); end;	{ $A1: LDA IZX }
 procedure	lda_izy;	begin lda(rd(ea_izy(FALSE))); end;	{ $B1: LDA IZY }
 procedure	ldx_imm;	begin cpu.x := fetch; set_nz(cpu.x); end;	{ $A2: LDX IMM }
-procedure	ldx_zp;		begin cpu.x := rd(ea_zp); set_nz(cpu.x); end;	{ $A6: LDX ZP }
-procedure	ldx_zpy;	begin cpu.x := rd(ea_zpi(cpu.y)); set_nz(cpu.x); end;	{ $B6: LDX ZPY }
+procedure	ldx_zp;		begin cpu.x := rd_ram(ea_zp); set_nz(cpu.x); end;	{ $A6: LDX ZP }
+procedure	ldx_zpy;	begin cpu.x := rd_ram(ea_zpi(cpu.y)); set_nz(cpu.x); end;	{ $B6: LDX ZPY }
 procedure	ldx_abs;	begin cpu.x := rd(ea_abs); set_nz(cpu.x); end;	{ $AE: LDX ABS }
 procedure	ldx_aby;	begin cpu.x := rd(ea_absi(cpu.y, FALSE)); set_nz(cpu.x); end;	{ $BE: LDX ABY }
 procedure	ldy_imm;	begin cpu.y := fetch; set_nz(cpu.y); end;	{ $A0: LDY IMM }
-procedure	ldy_zp;		begin cpu.y := rd(ea_zp); set_nz(cpu.y); end;	{ $A4: LDY ZP }
-procedure	ldy_zpx;	begin cpu.y := rd(ea_zpi(cpu.x)); set_nz(cpu.y); end;	{ $B4: LDY ZPX }
+procedure	ldy_zp;		begin cpu.y := rd_ram(ea_zp); set_nz(cpu.y); end;	{ $A4: LDY ZP }
+procedure	ldy_zpx;	begin cpu.y := rd_ram(ea_zpi(cpu.x)); set_nz(cpu.y); end;	{ $B4: LDY ZPX }
 procedure	ldy_abs;	begin cpu.y := rd(ea_abs); set_nz(cpu.y); end;	{ $AC: LDY ABS }
 procedure	ldy_abx;	begin cpu.y := rd(ea_absi(cpu.x, FALSE)); set_nz(cpu.y); end;	{ $BC: LDY ABX }
-procedure	sta_zp;		begin wr(ea_zp, cpu.a); end;	{ $85: STA ZP }
-procedure	sta_zpx;	begin wr(ea_zpi(cpu.x), cpu.a); end;	{ $95: STA ZPX }
+procedure	sta_zp;		begin wr_ram(ea_zp, cpu.a); end;	{ $85: STA ZP }
+procedure	sta_zpx;	begin wr_ram(ea_zpi(cpu.x), cpu.a); end;	{ $95: STA ZPX }
 procedure	sta_abs;	begin wr(ea_abs, cpu.a); end;	{ $8D: STA ABS }
 procedure	sta_abx;	begin wr(ea_absi(cpu.x, TRUE), cpu.a); end;	{ $9D: STA ABX }
 procedure	sta_aby;	begin wr(ea_absi(cpu.y, TRUE), cpu.a); end;	{ $99: STA ABY }
 procedure	sta_izx;	begin wr(ea_izx, cpu.a); end;	{ $81: STA IZX }
 procedure	sta_izy;	begin wr(ea_izy(TRUE), cpu.a); end;	{ $91: STA IZY }
-procedure	stx_zp;		begin wr(ea_zp, cpu.x); end;	{ $86: STX ZP }
-procedure	stx_zpy;	begin wr(ea_zpi(cpu.y), cpu.x); end;	{ $96: STX ZPY }
+procedure	stx_zp;		begin wr_ram(ea_zp, cpu.x); end;	{ $86: STX ZP }
+procedure	stx_zpy;	begin wr_ram(ea_zpi(cpu.y), cpu.x); end;	{ $96: STX ZPY }
 procedure	stx_abs;	begin wr(ea_abs, cpu.x); end;	{ $8E: STX ABS }
-procedure	sty_zp;		begin wr(ea_zp, cpu.y); end;	{ $84: STY ZP }
-procedure	sty_zpx;	begin wr(ea_zpi(cpu.x), cpu.y); end;	{ $94: STY ZPX }
+procedure	sty_zp;		begin wr_ram(ea_zp, cpu.y); end;	{ $84: STY ZP }
+procedure	sty_zpx;	begin wr_ram(ea_zpi(cpu.x), cpu.y); end;	{ $94: STY ZPX }
 procedure	sty_abs;	begin wr(ea_abs, cpu.y); end;	{ $8C: STY ABS }
 procedure	tax;		begin implied; cpu.x := cpu.a; set_nz(cpu.x); end;	{ $AA: TAX }
 procedure	tay;		begin implied; cpu.y := cpu.a; set_nz(cpu.y); end;	{ $A8: TAY }
@@ -424,60 +460,60 @@ procedure	txs;		begin implied; cpu.s := cpu.x; end;	{ $9A: TXS }
 
 { arithmetic and logic }
 procedure	ora_imm;	begin lda(cpu.a or fetch); end;	{ $09: ORA IMM }
-procedure	ora_zp;		begin lda(cpu.a or rd(ea_zp)); end;	{ $05: ORA ZP }
-procedure	ora_zpx;	begin lda(cpu.a or rd(ea_zpi(cpu.x))); end;	{ $15: ORA ZPX }
+procedure	ora_zp;		begin lda(cpu.a or rd_ram(ea_zp)); end;	{ $05: ORA ZP }
+procedure	ora_zpx;	begin lda(cpu.a or rd_ram(ea_zpi(cpu.x))); end;	{ $15: ORA ZPX }
 procedure	ora_abs;	begin lda(cpu.a or rd(ea_abs)); end;	{ $0D: ORA ABS }
 procedure	ora_abx;	begin lda(cpu.a or rd(ea_absi(cpu.x, FALSE))); end;	{ $1D: ORA ABX }
 procedure	ora_aby;	begin lda(cpu.a or rd(ea_absi(cpu.y, FALSE))); end;	{ $19: ORA ABY }
 procedure	ora_izx;	begin lda(cpu.a or rd(ea_izx)); end;	{ $01: ORA IZX }
 procedure	ora_izy;	begin lda(cpu.a or rd(ea_izy(FALSE))); end;	{ $11: ORA IZY }
 procedure	and_imm;	begin lda(cpu.a and fetch); end;	{ $29: AND IMM }
-procedure	and_zp;		begin lda(cpu.a and rd(ea_zp)); end;	{ $25: AND ZP }
-procedure	and_zpx;	begin lda(cpu.a and rd(ea_zpi(cpu.x))); end;	{ $35: AND ZPX }
+procedure	and_zp;		begin lda(cpu.a and rd_ram(ea_zp)); end;	{ $25: AND ZP }
+procedure	and_zpx;	begin lda(cpu.a and rd_ram(ea_zpi(cpu.x))); end;	{ $35: AND ZPX }
 procedure	and_abs;	begin lda(cpu.a and rd(ea_abs)); end;	{ $2D: AND ABS }
 procedure	and_abx;	begin lda(cpu.a and rd(ea_absi(cpu.x, FALSE))); end;	{ $3D: AND ABX }
 procedure	and_aby;	begin lda(cpu.a and rd(ea_absi(cpu.y, FALSE))); end;	{ $39: AND ABY }
 procedure	and_izx;	begin lda(cpu.a and rd(ea_izx)); end;	{ $21: AND IZX }
 procedure	and_izy;	begin lda(cpu.a and rd(ea_izy(FALSE))); end;	{ $31: AND IZY }
 procedure	eor_imm;	begin lda(cpu.a xor fetch); end;	{ $49: EOR IMM }
-procedure	eor_zp;		begin lda(cpu.a xor rd(ea_zp)); end;	{ $45: EOR ZP }
-procedure	eor_zpx;	begin lda(cpu.a xor rd(ea_zpi(cpu.x))); end;	{ $55: EOR ZPX }
+procedure	eor_zp;		begin lda(cpu.a xor rd_ram(ea_zp)); end;	{ $45: EOR ZP }
+procedure	eor_zpx;	begin lda(cpu.a xor rd_ram(ea_zpi(cpu.x))); end;	{ $55: EOR ZPX }
 procedure	eor_abs;	begin lda(cpu.a xor rd(ea_abs)); end;	{ $4D: EOR ABS }
 procedure	eor_abx;	begin lda(cpu.a xor rd(ea_absi(cpu.x, FALSE))); end;	{ $5D: EOR ABX }
 procedure	eor_aby;	begin lda(cpu.a xor rd(ea_absi(cpu.y, FALSE))); end;	{ $59: EOR ABY }
 procedure	eor_izx;	begin lda(cpu.a xor rd(ea_izx)); end;	{ $41: EOR IZX }
 procedure	eor_izy;	begin lda(cpu.a xor rd(ea_izy(FALSE))); end;	{ $51: EOR IZY }
 procedure	adc_imm;	begin adc(fetch); end;	{ $69: ADC IMM }
-procedure	adc_zp;		begin adc(rd(ea_zp)); end;	{ $65: ADC ZP }
-procedure	adc_zpx;	begin adc(rd(ea_zpi(cpu.x))); end;	{ $75: ADC ZPX }
+procedure	adc_zp;		begin adc(rd_ram(ea_zp)); end;	{ $65: ADC ZP }
+procedure	adc_zpx;	begin adc(rd_ram(ea_zpi(cpu.x))); end;	{ $75: ADC ZPX }
 procedure	adc_abs;	begin adc(rd(ea_abs)); end;	{ $6D: ADC ABS }
 procedure	adc_abx;	begin adc(rd(ea_absi(cpu.x, FALSE))); end;	{ $7D: ADC ABX }
 procedure	adc_aby;	begin adc(rd(ea_absi(cpu.y, FALSE))); end;	{ $79: ADC ABY }
 procedure	adc_izx;	begin adc(rd(ea_izx)); end;	{ $61: ADC IZX }
 procedure	adc_izy;	begin adc(rd(ea_izy(FALSE))); end;	{ $71: ADC IZY }
 procedure	sbc_imm;	begin sbc(fetch); end;	{ $E9 $EB: SBC IMM (EB unofficial) }
-procedure	sbc_zp;		begin sbc(rd(ea_zp)); end;	{ $E5: SBC ZP }
-procedure	sbc_zpx;	begin sbc(rd(ea_zpi(cpu.x))); end;	{ $F5: SBC ZPX }
+procedure	sbc_zp;		begin sbc(rd_ram(ea_zp)); end;	{ $E5: SBC ZP }
+procedure	sbc_zpx;	begin sbc(rd_ram(ea_zpi(cpu.x))); end;	{ $F5: SBC ZPX }
 procedure	sbc_abs;	begin sbc(rd(ea_abs)); end;	{ $ED: SBC ABS }
 procedure	sbc_abx;	begin sbc(rd(ea_absi(cpu.x, FALSE))); end;	{ $FD: SBC ABX }
 procedure	sbc_aby;	begin sbc(rd(ea_absi(cpu.y, FALSE))); end;	{ $F9: SBC ABY }
 procedure	sbc_izx;	begin sbc(rd(ea_izx)); end;	{ $E1: SBC IZX }
 procedure	sbc_izy;	begin sbc(rd(ea_izy(FALSE))); end;	{ $F1: SBC IZY }
 procedure	cmp_imm;	begin compare(cpu.a, fetch); end;	{ $C9: CMP IMM }
-procedure	cmp_zp;		begin compare(cpu.a, rd(ea_zp)); end;	{ $C5: CMP ZP }
-procedure	cmp_zpx;	begin compare(cpu.a, rd(ea_zpi(cpu.x))); end;	{ $D5: CMP ZPX }
+procedure	cmp_zp;		begin compare(cpu.a, rd_ram(ea_zp)); end;	{ $C5: CMP ZP }
+procedure	cmp_zpx;	begin compare(cpu.a, rd_ram(ea_zpi(cpu.x))); end;	{ $D5: CMP ZPX }
 procedure	cmp_abs;	begin compare(cpu.a, rd(ea_abs)); end;	{ $CD: CMP ABS }
 procedure	cmp_abx;	begin compare(cpu.a, rd(ea_absi(cpu.x, FALSE))); end;	{ $DD: CMP ABX }
 procedure	cmp_aby;	begin compare(cpu.a, rd(ea_absi(cpu.y, FALSE))); end;	{ $D9: CMP ABY }
 procedure	cmp_izx;	begin compare(cpu.a, rd(ea_izx)); end;	{ $C1: CMP IZX }
 procedure	cmp_izy;	begin compare(cpu.a, rd(ea_izy(FALSE))); end;	{ $D1: CMP IZY }
 procedure	cpx_imm;	begin compare(cpu.x, fetch); end;	{ $E0: CPX IMM }
-procedure	cpx_zp;		begin compare(cpu.x, rd(ea_zp)); end;	{ $E4: CPX ZP }
+procedure	cpx_zp;		begin compare(cpu.x, rd_ram(ea_zp)); end;	{ $E4: CPX ZP }
 procedure	cpx_abs;	begin compare(cpu.x, rd(ea_abs)); end;	{ $EC: CPX ABS }
 procedure	cpy_imm;	begin compare(cpu.y, fetch); end;	{ $C0: CPY IMM }
-procedure	cpy_zp;		begin compare(cpu.y, rd(ea_zp)); end;	{ $C4: CPY ZP }
+procedure	cpy_zp;		begin compare(cpu.y, rd_ram(ea_zp)); end;	{ $C4: CPY ZP }
 procedure	cpy_abs;	begin compare(cpu.y, rd(ea_abs)); end;	{ $CC: CPY ABS }
-procedure	bit_zp;		begin f_bit(rd(ea_zp)); end;	{ $24: BIT ZP }
+procedure	bit_zp;		begin f_bit(rd_ram(ea_zp)); end;	{ $24: BIT ZP }
 procedure	bit_abs;	begin f_bit(rd(ea_abs)); end;	{ $2C: BIT ABS }
 
 { shifts and steps: the accumulator, or memory read-modify-written }
@@ -485,28 +521,28 @@ procedure	asl_a;		begin implied; cpu.a := f_asl(cpu.a); end;	{ $0A: ASL A }
 procedure	lsr_a;		begin implied; cpu.a := f_lsr(cpu.a); end;	{ $4A: LSR A }
 procedure	rol_a;		begin implied; cpu.a := f_rol(cpu.a); end;	{ $2A: ROL A }
 procedure	ror_a;		begin implied; cpu.a := f_ror(cpu.a); end;	{ $6A: ROR A }
-procedure	asl_zp;		begin rmw(ea_zp, K_ASL); end;	{ $06: ASL ZP }
-procedure	asl_zpx;	begin rmw(ea_zpi(cpu.x), K_ASL); end;	{ $16: ASL ZPX }
+procedure	asl_zp;		begin rmw_ram(ea_zp, K_ASL); end;	{ $06: ASL ZP }
+procedure	asl_zpx;	begin rmw_ram(ea_zpi(cpu.x), K_ASL); end;	{ $16: ASL ZPX }
 procedure	asl_abs;	begin rmw(ea_abs, K_ASL); end;	{ $0E: ASL ABS }
 procedure	asl_abx;	begin rmw(ea_absi(cpu.x, TRUE), K_ASL); end;	{ $1E: ASL ABX }
-procedure	lsr_zp;		begin rmw(ea_zp, K_LSR); end;	{ $46: LSR ZP }
-procedure	lsr_zpx;	begin rmw(ea_zpi(cpu.x), K_LSR); end;	{ $56: LSR ZPX }
+procedure	lsr_zp;		begin rmw_ram(ea_zp, K_LSR); end;	{ $46: LSR ZP }
+procedure	lsr_zpx;	begin rmw_ram(ea_zpi(cpu.x), K_LSR); end;	{ $56: LSR ZPX }
 procedure	lsr_abs;	begin rmw(ea_abs, K_LSR); end;	{ $4E: LSR ABS }
 procedure	lsr_abx;	begin rmw(ea_absi(cpu.x, TRUE), K_LSR); end;	{ $5E: LSR ABX }
-procedure	rol_zp;		begin rmw(ea_zp, K_ROL); end;	{ $26: ROL ZP }
-procedure	rol_zpx;	begin rmw(ea_zpi(cpu.x), K_ROL); end;	{ $36: ROL ZPX }
+procedure	rol_zp;		begin rmw_ram(ea_zp, K_ROL); end;	{ $26: ROL ZP }
+procedure	rol_zpx;	begin rmw_ram(ea_zpi(cpu.x), K_ROL); end;	{ $36: ROL ZPX }
 procedure	rol_abs;	begin rmw(ea_abs, K_ROL); end;	{ $2E: ROL ABS }
 procedure	rol_abx;	begin rmw(ea_absi(cpu.x, TRUE), K_ROL); end;	{ $3E: ROL ABX }
-procedure	ror_zp;		begin rmw(ea_zp, K_ROR); end;	{ $66: ROR ZP }
-procedure	ror_zpx;	begin rmw(ea_zpi(cpu.x), K_ROR); end;	{ $76: ROR ZPX }
+procedure	ror_zp;		begin rmw_ram(ea_zp, K_ROR); end;	{ $66: ROR ZP }
+procedure	ror_zpx;	begin rmw_ram(ea_zpi(cpu.x), K_ROR); end;	{ $76: ROR ZPX }
 procedure	ror_abs;	begin rmw(ea_abs, K_ROR); end;	{ $6E: ROR ABS }
 procedure	ror_abx;	begin rmw(ea_absi(cpu.x, TRUE), K_ROR); end;	{ $7E: ROR ABX }
-procedure	dec_zp;		begin rmw(ea_zp, K_DEC); end;	{ $C6: DEC ZP }
-procedure	dec_zpx;	begin rmw(ea_zpi(cpu.x), K_DEC); end;	{ $D6: DEC ZPX }
+procedure	dec_zp;		begin rmw_ram(ea_zp, K_DEC); end;	{ $C6: DEC ZP }
+procedure	dec_zpx;	begin rmw_ram(ea_zpi(cpu.x), K_DEC); end;	{ $D6: DEC ZPX }
 procedure	dec_abs;	begin rmw(ea_abs, K_DEC); end;	{ $CE: DEC ABS }
 procedure	dec_abx;	begin rmw(ea_absi(cpu.x, TRUE), K_DEC); end;	{ $DE: DEC ABX }
-procedure	inc_zp;		begin rmw(ea_zp, K_INC); end;	{ $E6: INC ZP }
-procedure	inc_zpx;	begin rmw(ea_zpi(cpu.x), K_INC); end;	{ $F6: INC ZPX }
+procedure	inc_zp;		begin rmw_ram(ea_zp, K_INC); end;	{ $E6: INC ZP }
+procedure	inc_zpx;	begin rmw_ram(ea_zpi(cpu.x), K_INC); end;	{ $F6: INC ZPX }
 procedure	inc_abs;	begin rmw(ea_abs, K_INC); end;	{ $EE: INC ABS }
 procedure	inc_abx;	begin rmw(ea_absi(cpu.x, TRUE), K_INC); end;	{ $FE: INC ABX }
 procedure	dex;		begin implied; cpu.x := (cpu.x - 1) and $FF; set_nz(cpu.x); end;	{ $CA: DEX }
@@ -539,7 +575,7 @@ procedure	jsr;	{ $20: JSR }
 var	lo	: U16;
 begin
 	lo := fetch;
-	rd($100 + cpu.s);
+	rd_ram($100 + cpu.s);
 	push(cpu.pc shr 8);
 	push(cpu.pc and $FF);
 	cpu.pc := lo or rd(cpu.pc) shl 8;
@@ -549,7 +585,7 @@ procedure	rts;	{ $60: RTS }
 var	a, lo	: U16;
 begin
 	implied;
-	rd($100 + cpu.s);
+	rd_ram($100 + cpu.s);
 	lo := pop;
 	a := lo or pop shl 8;
 	rd(a);
@@ -560,7 +596,7 @@ procedure	rti;	{ $40: RTI }
 var	lo	: U16;
 begin
 	implied;
-	rd($100 + cpu.s);
+	rd_ram($100 + cpu.s);
 	cpu_set_p(pop);
 	lo := pop;
 	cpu.pc := lo or pop shl 8;
@@ -579,14 +615,14 @@ procedure	php;		begin implied; push(cpu_p or $10); end;	{ $08: PHP }
 procedure	pla;	{ $68: PLA }
 begin
 	implied;
-	rd($100 + cpu.s);
+	rd_ram($100 + cpu.s);
 	lda(pop);
 end;
 
 procedure	plp;	{ $28: PLP }
 begin
 	implied;
-	rd($100 + cpu.s);
+	rd_ram($100 + cpu.s);
 	i_poll := cpu.i;
 	cpu_set_p(pop);
 end;
@@ -602,50 +638,50 @@ procedure	sed;		begin implied; cpu.d := 1; end;	{ $F8: SED }
 { the NOPs, official and not: their reads all the same }
 procedure	nop;		begin implied; end;	{ $1A $3A $5A $7A $DA $EA $FA: NOP }
 procedure	nop_imm;	begin fetch; end;	{ $80 $82 $89 $C2 $E2: NOP IMM }
-procedure	nop_zp;		begin rd(ea_zp); end;	{ $04 $44 $64: NOP ZP }
-procedure	nop_zpx;	begin rd(ea_zpi(cpu.x)); end;	{ $14 $34 $54 $74 $D4 $F4: NOP ZPX }
+procedure	nop_zp;		begin rd_ram(ea_zp); end;	{ $04 $44 $64: NOP ZP }
+procedure	nop_zpx;	begin rd_ram(ea_zpi(cpu.x)); end;	{ $14 $34 $54 $74 $D4 $F4: NOP ZPX }
 procedure	nop_abs;	begin rd(ea_abs); end;	{ $0C: NOP ABS }
 procedure	nop_abx;	begin rd(ea_absi(cpu.x, FALSE)); end;	{ $1C $3C $5C $7C $DC $FC: NOP ABX }
 
 { the unofficial read-modify-writes: the step, then a second
   operation on its result }
-procedure	slo_zp;		begin lda(cpu.a or rmw(ea_zp, K_ASL)); end;	{ $07: SLO ZP }
-procedure	slo_zpx;	begin lda(cpu.a or rmw(ea_zpi(cpu.x), K_ASL)); end;	{ $17: SLO ZPX }
+procedure	slo_zp;		begin lda(cpu.a or rmw_ram(ea_zp, K_ASL)); end;	{ $07: SLO ZP }
+procedure	slo_zpx;	begin lda(cpu.a or rmw_ram(ea_zpi(cpu.x), K_ASL)); end;	{ $17: SLO ZPX }
 procedure	slo_abs;	begin lda(cpu.a or rmw(ea_abs, K_ASL)); end;	{ $0F: SLO ABS }
 procedure	slo_abx;	begin lda(cpu.a or rmw(ea_absi(cpu.x, TRUE), K_ASL)); end;	{ $1F: SLO ABX }
 procedure	slo_aby;	begin lda(cpu.a or rmw(ea_absi(cpu.y, TRUE), K_ASL)); end;	{ $1B: SLO ABY }
 procedure	slo_izx;	begin lda(cpu.a or rmw(ea_izx, K_ASL)); end;	{ $03: SLO IZX }
 procedure	slo_izy;	begin lda(cpu.a or rmw(ea_izy(TRUE), K_ASL)); end;	{ $13: SLO IZY }
-procedure	rla_zp;		begin lda(cpu.a and rmw(ea_zp, K_ROL)); end;	{ $27: RLA ZP }
-procedure	rla_zpx;	begin lda(cpu.a and rmw(ea_zpi(cpu.x), K_ROL)); end;	{ $37: RLA ZPX }
+procedure	rla_zp;		begin lda(cpu.a and rmw_ram(ea_zp, K_ROL)); end;	{ $27: RLA ZP }
+procedure	rla_zpx;	begin lda(cpu.a and rmw_ram(ea_zpi(cpu.x), K_ROL)); end;	{ $37: RLA ZPX }
 procedure	rla_abs;	begin lda(cpu.a and rmw(ea_abs, K_ROL)); end;	{ $2F: RLA ABS }
 procedure	rla_abx;	begin lda(cpu.a and rmw(ea_absi(cpu.x, TRUE), K_ROL)); end;	{ $3F: RLA ABX }
 procedure	rla_aby;	begin lda(cpu.a and rmw(ea_absi(cpu.y, TRUE), K_ROL)); end;	{ $3B: RLA ABY }
 procedure	rla_izx;	begin lda(cpu.a and rmw(ea_izx, K_ROL)); end;	{ $23: RLA IZX }
 procedure	rla_izy;	begin lda(cpu.a and rmw(ea_izy(TRUE), K_ROL)); end;	{ $33: RLA IZY }
-procedure	sre_zp;		begin lda(cpu.a xor rmw(ea_zp, K_LSR)); end;	{ $47: SRE ZP }
-procedure	sre_zpx;	begin lda(cpu.a xor rmw(ea_zpi(cpu.x), K_LSR)); end;	{ $57: SRE ZPX }
+procedure	sre_zp;		begin lda(cpu.a xor rmw_ram(ea_zp, K_LSR)); end;	{ $47: SRE ZP }
+procedure	sre_zpx;	begin lda(cpu.a xor rmw_ram(ea_zpi(cpu.x), K_LSR)); end;	{ $57: SRE ZPX }
 procedure	sre_abs;	begin lda(cpu.a xor rmw(ea_abs, K_LSR)); end;	{ $4F: SRE ABS }
 procedure	sre_abx;	begin lda(cpu.a xor rmw(ea_absi(cpu.x, TRUE), K_LSR)); end;	{ $5F: SRE ABX }
 procedure	sre_aby;	begin lda(cpu.a xor rmw(ea_absi(cpu.y, TRUE), K_LSR)); end;	{ $5B: SRE ABY }
 procedure	sre_izx;	begin lda(cpu.a xor rmw(ea_izx, K_LSR)); end;	{ $43: SRE IZX }
 procedure	sre_izy;	begin lda(cpu.a xor rmw(ea_izy(TRUE), K_LSR)); end;	{ $53: SRE IZY }
-procedure	rra_zp;		begin adc(rmw(ea_zp, K_ROR)); end;	{ $67: RRA ZP }
-procedure	rra_zpx;	begin adc(rmw(ea_zpi(cpu.x), K_ROR)); end;	{ $77: RRA ZPX }
+procedure	rra_zp;		begin adc(rmw_ram(ea_zp, K_ROR)); end;	{ $67: RRA ZP }
+procedure	rra_zpx;	begin adc(rmw_ram(ea_zpi(cpu.x), K_ROR)); end;	{ $77: RRA ZPX }
 procedure	rra_abs;	begin adc(rmw(ea_abs, K_ROR)); end;	{ $6F: RRA ABS }
 procedure	rra_abx;	begin adc(rmw(ea_absi(cpu.x, TRUE), K_ROR)); end;	{ $7F: RRA ABX }
 procedure	rra_aby;	begin adc(rmw(ea_absi(cpu.y, TRUE), K_ROR)); end;	{ $7B: RRA ABY }
 procedure	rra_izx;	begin adc(rmw(ea_izx, K_ROR)); end;	{ $63: RRA IZX }
 procedure	rra_izy;	begin adc(rmw(ea_izy(TRUE), K_ROR)); end;	{ $73: RRA IZY }
-procedure	dcp_zp;		begin compare(cpu.a, rmw(ea_zp, K_DEC)); end;	{ $C7: DCP ZP }
-procedure	dcp_zpx;	begin compare(cpu.a, rmw(ea_zpi(cpu.x), K_DEC)); end;	{ $D7: DCP ZPX }
+procedure	dcp_zp;		begin compare(cpu.a, rmw_ram(ea_zp, K_DEC)); end;	{ $C7: DCP ZP }
+procedure	dcp_zpx;	begin compare(cpu.a, rmw_ram(ea_zpi(cpu.x), K_DEC)); end;	{ $D7: DCP ZPX }
 procedure	dcp_abs;	begin compare(cpu.a, rmw(ea_abs, K_DEC)); end;	{ $CF: DCP ABS }
 procedure	dcp_abx;	begin compare(cpu.a, rmw(ea_absi(cpu.x, TRUE), K_DEC)); end;	{ $DF: DCP ABX }
 procedure	dcp_aby;	begin compare(cpu.a, rmw(ea_absi(cpu.y, TRUE), K_DEC)); end;	{ $DB: DCP ABY }
 procedure	dcp_izx;	begin compare(cpu.a, rmw(ea_izx, K_DEC)); end;	{ $C3: DCP IZX }
 procedure	dcp_izy;	begin compare(cpu.a, rmw(ea_izy(TRUE), K_DEC)); end;	{ $D3: DCP IZY }
-procedure	isc_zp;		begin sbc(rmw(ea_zp, K_INC)); end;	{ $E7: ISC ZP }
-procedure	isc_zpx;	begin sbc(rmw(ea_zpi(cpu.x), K_INC)); end;	{ $F7: ISC ZPX }
+procedure	isc_zp;		begin sbc(rmw_ram(ea_zp, K_INC)); end;	{ $E7: ISC ZP }
+procedure	isc_zpx;	begin sbc(rmw_ram(ea_zpi(cpu.x), K_INC)); end;	{ $F7: ISC ZPX }
 procedure	isc_abs;	begin sbc(rmw(ea_abs, K_INC)); end;	{ $EF: ISC ABS }
 procedure	isc_abx;	begin sbc(rmw(ea_absi(cpu.x, TRUE), K_INC)); end;	{ $FF: ISC ABX }
 procedure	isc_aby;	begin sbc(rmw(ea_absi(cpu.y, TRUE), K_INC)); end;	{ $FB: ISC ABY }
@@ -653,15 +689,15 @@ procedure	isc_izx;	begin sbc(rmw(ea_izx, K_INC)); end;	{ $E3: ISC IZX }
 procedure	isc_izy;	begin sbc(rmw(ea_izy(TRUE), K_INC)); end;	{ $F3: ISC IZY }
 
 { the other unofficial ones }
-procedure	lax_zp;		begin cpu.x := rd(ea_zp); lda(cpu.x); end;	{ $A7: LAX ZP }
-procedure	lax_zpy;	begin cpu.x := rd(ea_zpi(cpu.y)); lda(cpu.x); end;	{ $B7: LAX ZPY }
+procedure	lax_zp;		begin cpu.x := rd_ram(ea_zp); lda(cpu.x); end;	{ $A7: LAX ZP }
+procedure	lax_zpy;	begin cpu.x := rd_ram(ea_zpi(cpu.y)); lda(cpu.x); end;	{ $B7: LAX ZPY }
 procedure	lax_abs;	begin cpu.x := rd(ea_abs); lda(cpu.x); end;	{ $AF: LAX ABS }
 procedure	lax_aby;	begin cpu.x := rd(ea_absi(cpu.y, FALSE)); lda(cpu.x); end;	{ $BF: LAX ABY }
 procedure	lax_izx;	begin cpu.x := rd(ea_izx); lda(cpu.x); end;	{ $A3: LAX IZX }
 procedure	lax_izy;	begin cpu.x := rd(ea_izy(FALSE)); lda(cpu.x); end;	{ $B3: LAX IZY }
 procedure	lxa_imm;	begin cpu.x := fetch; lda(cpu.x); end;	{ $AB: LXA IMM: A = X = the operand }
-procedure	sax_zp;		begin wr(ea_zp, cpu.a and cpu.x); end;	{ $87: SAX ZP }
-procedure	sax_zpy;	begin wr(ea_zpi(cpu.y), cpu.a and cpu.x); end;	{ $97: SAX ZPY }
+procedure	sax_zp;		begin wr_ram(ea_zp, cpu.a and cpu.x); end;	{ $87: SAX ZP }
+procedure	sax_zpy;	begin wr_ram(ea_zpi(cpu.y), cpu.a and cpu.x); end;	{ $97: SAX ZPY }
 procedure	sax_abs;	begin wr(ea_abs, cpu.a and cpu.x); end;	{ $8F: SAX ABS }
 procedure	sax_izx;	begin wr(ea_izx, cpu.a and cpu.x); end;	{ $83: SAX IZX }
 
@@ -836,6 +872,8 @@ end;
 
 procedure	cpu_run(until_cycle: longint);
 var	interrupted	: boolean;
+	p		: PBYTE;
+	op		: U16;
 begin
 	run_until := until_cycle;
 	if cpu.jammed then exit;
@@ -860,8 +898,26 @@ begin
 			if run_until < bus_next_event then bus_next_event := run_until;
 			if (ppu_nmi_cycle <> PPU_NEVER) and (ppu_nmi_cycle + 1 < bus_next_event) then
 				bus_next_event := ppu_nmi_cycle + 1;
-			{ instructions until it }
+			{ instructions until it; with no IRQ due before then, no poll
+			  (what could raise one ends the run at once), the opcode
+			  read here (fetch's work: the call saved) }
 			interrupted := FALSE;
+			if (irq_seen >= cycles) and (irq_seen >= bus_next_event) then
+				repeat
+					step_cycle := cycles;
+					i_poll := -1;
+					p := bus_rpage[cpu.pc shr 11];
+					if p <> nil then
+					begin
+						inc(cycles);
+						op := PBYTES(p)^[cpu.pc];
+						bus_open := op;
+						cpu.pc := (cpu.pc + 1) and $FFFF;
+					end
+					else	op := fetch;
+					OPS[op];
+				until cycles >= bus_next_event
+			else
 			repeat
 				step_cycle := cycles;
 				if (irq_seen < cycles) and irq_wanted then
